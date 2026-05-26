@@ -98,10 +98,13 @@ pub const OP_GET_NR_ON_OFF: [u8; 2]         = [0x41, 0x20];
 // ---------- SET (write state) ----------
 // 0x51 family: opcode at bytes 0..2, single bool/byte parameter at byte 4.
 
-/// Set RGB effect mode. Payload bytes 4..8 carry (mode, p1, p2, p3, p4) —
-/// exact param semantics still need replay-mapping (e.g. which is speed,
-/// which are R/G/B).
+/// Set RGB effect mode. Payload bytes 4..8 carry (mode, intensity, R, G, B).
+/// Live-probed valid modes: **1, 2, 3, 4** (mode 0 = off / clear, modes 5+
+/// rejected). Intensity range and effect identities (static/breathing/strobe/
+/// rainbow) still need to be mapped to UI labels.
 pub const OP_SET_LIGHT_EFFECT: [u8; 2]      = [0x51, 0x28];
+/// Valid `setLightEffect` mode values, sorted.
+pub const LIGHT_EFFECT_MODES: [u8; 4] = [1, 2, 3, 4];
 /// Direct (software-mode) RGB color. Payload bytes 4..7 = R, G, B.
 /// Opcode is 4 bytes because bytes 2..4 are reserved (zero-filled).
 pub const OP_SET_SW_LED_COLOR: [u8; 4]      = [0x51, 0x30, 0x00, 0x00];
@@ -109,8 +112,14 @@ pub const OP_SET_SW_LED_COLOR: [u8; 4]      = [0x51, 0x30, 0x00, 0x00];
 pub const OP_SET_DEMO_MODE_ON_OFF: [u8; 2]  = [0x51, 0x31];
 /// Enable pairing (wireless). Byte 4 = 0 or 1.
 pub const OP_SET_DEVICE_WDL_ENABLE: [u8; 2] = [0x51, 0x33];
-/// Low-latency mode on/off (wireless). Byte 4 = 0 or 1.
+/// Wireless latency preset (NOT a boolean — despite the HAL symbol name).
+/// Live-probed accepted values: **0x28 (40), 0x3C (60), 0x50 (80), 0x64 (100)**
+/// — likely milliseconds of audio buffer / link latency. All other byte
+/// values are silently rejected by the device (GET returns the previously
+/// accepted value).
 pub const OP_SET_LATENCY_MODE: [u8; 2]      = [0x51, 0x52];
+/// Valid `setLatencyMode` byte values (ms presets).
+pub const LATENCY_MODE_VALUES_MS: [u8; 4] = [40, 60, 80, 100];
 
 /// Software-mode on/off (wireless only). Same opcode bytes as
 /// SET_DEVICE_WDL_ENABLE, but the wrapper routes it through a different HID

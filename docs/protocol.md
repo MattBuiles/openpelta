@@ -225,12 +225,30 @@ remainder is zero-padded.
 | `getNROnOff`           | `41 20`       | `00`            | NR disabled                               |
 
 Notes:
-- `getLatencyMode` returning `0x64` is unexpected — the HAL header treats
-  this as a boolean toggle (`setLatencyMode` takes a single byte 0/1), but
-  the live read is `0x64 = 100`. May indicate latency-in-ms or a percentage
-  scale; the setter range needs to be probed.
-- `getHeadsetExist` was not run in this round (wireless-only and we already
-  had the dongle paired). To probe it, request with `12 00 00 01`.
+- `getLatencyMode` returning `0x64` is **not** a boolean. Follow-up probe
+  (see below) shows it accepts only four discrete byte values — likely a
+  millisecond preset.
+- `getHeadsetExist` was confirmed in a follow-up: with the dongle paired,
+  the 4-byte opcode `12 00 00 01` returns `0x01` at payload byte 5.
+
+### Live SET round-trips and range probes
+
+| Operation             | Round-trip result                                          |
+|-----------------------|------------------------------------------------------------|
+| `setDemoModeOnOff`    | SET 1 → GET `01`, SET 0 → GET `00` ✅ boolean              |
+| `setNROnOff`          | SET 1 → GET `01`, SET 0 → GET `00` ✅ boolean              |
+| **`setLatencyMode`**  | Accepts only **`0x28 (40), 0x3C (60), 0x50 (80), 0x64 (100)`** — any other byte is silently rejected (GET returns the previously accepted value). Almost certainly four latency presets in milliseconds (Ultra-low / Low / Normal / Power-save). |
+| **`setLightEffect`**  | Accepted modes: **`0x01, 0x02, 0x03, 0x04`**. Mode `0x00` clears params to zero (LED goes black, internal mode tag stays at last value); modes `0x05+` are silently rejected. Payload bytes 4..8 = (mode, intensity 0x32 nominal, R, G, B). |
+| `setSWLEDColor`       | Visually confirmed in all four primaries (red / green / blue / white). Works without `setSWModeOnOff` on the wireless variant — direct color mode is the default. |
+
+### Not yet probed (require user gating or destructive action)
+
+| Operation           | Why deferred                                              |
+|---------------------|-----------------------------------------------------------|
+| `setSWModeOnOff`    | Uses a different HID writer (`fcn.18002b7b0`); likely targets a different report ID or the RF state collection (0xFF07). Needs separate replay with the right channel. |
+| `setDeviceWDLEnable`| Toggling pairing live would disconnect the headset. Defer until we have a recover-by-cable plan. |
+| Battery calibration | Requires running the headset down on battery and comparing `getPowerInfo` reads against an external % display over hours. |
+| Bluetooth variant   | PID `0x1b86` is documented in the ASUS config but the device has not been enumerated live in BT mode. |
 
 ### Replay procedure (Windows)
 
