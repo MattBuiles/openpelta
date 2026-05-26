@@ -106,14 +106,79 @@ writer prepends the report ID `0xCC`, giving 65 bytes on the wire:
 
 ```
 wire[0]    : 0xCC                (report ID)
-wire[1..2] : <opcode>            (1 or 2 bytes — operation identifier)
-wire[3..]  : <parameters>        (operation-specific)
-wire[..64] : 0x00 padding
+wire[1..]  : 64-byte payload, zero-filled then patched as follows:
+  payload[0..N] : opcode bytes (1, 2, 4 — see table)
+  payload[4..]  : parameters (operation-specific)
 ```
 
-### Decoded commands
+Three opcode families share the channel, differentiated by the first byte:
 
-#### `getFWVersion`  ✅ decoded, not yet replay-validated
+| Family | First byte | Meaning                          |
+|--------|:----------:|----------------------------------|
+| GET    | `0x12`     | Read device state                |
+| SET    | `0x51`     | Write device state               |
+| NR     | `0x41`     | Noise-reduction (audio DSP)      |
+
+### Complete opcode table (Phase 1 — decoded from `AacAudioHal_x64.dll`)
+
+All 23 operations exposed by `C_A501_Protocol` / `C_A501_USB_Protocol` have
+been decoded. **None has been replay-validated against the live device yet.**
+
+#### GET operations (response in Input report `0xCC`)
+
+| Operation              | Payload[0..N]       | Cached at (`[this+offset]`) |
+|------------------------|---------------------|-----------------------------|
+| `getFWVersion`         | `12 00`             | `0xc3..0xca` (8 bytes: HW + FW versions) |
+| `getEffectInfo`        | `12 03`             | (current LED mode + params) |
+| `getPowerInfo`         | `12 07`             | (battery % + power state)   |
+| `getChargingState`     | `12 08`             | `0xaf`                      |
+| `getPowerSavingMode`   | `12 0e`             | `0xb8`                      |
+| `getLEDOnOff`          | `12 13`             | `0xb6`                      |
+| `getDemoMode`          | `12 18`             | `0xb4`                      |
+| `getSidetoneVolume`    | `12 19`             | (TBD)                       |
+| `getSidetoneOnOff`     | `12 24`             | (TBD)                       |
+| `getLanguage`          | `12 28`             | (TBD)                       |
+| `getWDLStatus`         | `12 29`             | `0xa9`                      |
+| `getWDLControlStatus`  | `12 33`             | (TBD)                       |
+| `getLatencyMode`       | `12 52`             | `0xba`                      |
+| `getHeadsetExist` (wl) | `12 00 00 01` (4 B!)| `0xad`                      |
+| `getNROnOff`           | `41 20`             | `0xd6`                      |
+
+#### SET operations (response: status byte in Input `0xCC`)
+
+| Operation              | Payload[0..N]       | Params (payload[4..])        |
+|------------------------|---------------------|------------------------------|
+| `setLightEffect`       | `51 28`             | 5 bytes — mode + 4 params (semantics TBD: speed, R, G, B?) |
+| `setSWLEDColor`        | `51 30 00 00`       | `R G B` at bytes 4..6       |
+| `setDemoModeOnOff`     | `51 31`             | bool at byte 4               |
+| `setDeviceWDLEnable` (wl) | `51 33`          | bool at byte 4 (pairing on/off) |
+| `setLatencyMode` (wl)  | `51 52`             | bool at byte 4               |
+| `setSWModeOnOff` (wl)  | `51 33` ⚠️          | bool at byte 4 — uses a **different writer** (`fcn.18002b7b0`) than all other SETs; likely targets a separate report ID or interface (possibly RF state collection 0xFF07). Distinct from `setDeviceWDLEnable` despite identical opcode bytes. |
+| `setNROnOff`           | `41 02`             | bool at byte 4               |
+| `setCmd`               | (passthrough)       | caller provides opcode + params verbatim |
+
+#### Worked example: `setSWLEDColor(R, G, B)`
+
+```
+wire: CC 51 30 00 00 RR GG BB 00 00 00 ... (zero-padded to 65 bytes)
+       │  ╰──opcode────╯ │  │  │
+       │  byte 0..3      │  │  └── B  (payload[6])
+       │                 │  └───── G  (payload[5])
+       │                 └──────── R  (payload[4])
+       └── Report ID
+```
+
+The opcode `0x51` matches the `AURA_DIRECT_RGB` pattern documented for other
+ASUS Aura USB devices in OpenRGB.
+
+#### Worked example: `getFWVersion`
+
+```
+wire request : CC 12 00 00 ... (zero-padded to 65 bytes)
+```
+
+Response arrives as Input report `0xCC`; the HAL extracts 8 version bytes
+and formats them as two `%02X.%02X.%02X.%02X` strings (HW and FW).
 
 Source: `fcn.18002e540` in HAL DLL (xref from `mutex_getFWVersion` log strings).
 
@@ -149,22 +214,6 @@ wire: CC 51 30 00 00 RR GG BB 00 ... (56 zeros)
 The opcode `0x51` matches the `AURA_DIRECT_RGB` pattern documented for other
 ASUS Aura USB devices (see OpenRGB), and `0x30` is plausibly the headset-LED
 sub-channel selector.
-
-### Pending decode (Phase 1 continuation)
-
-| Action               | Opcode | Params               | Notes                          |
-|----------------------|:------:|----------------------|--------------------------------|
-| Set RGB effect mode  | `0x??` | mode, speed, R, G, B | from `setLightEffect`          |
-| Toggle SW direct mode| `0x??` | bool                 | wireless only                  |
-| Set noise reduction  | `0x??` | bool                 | from `setNROnOff`              |
-| Set demo mode        | `0x??` | bool                 | from `setDemoModeOnOff`        |
-| Set latency mode     | `0x??` | bool                 | wireless only                  |
-| Enable pairing       | `0x??` | bool                 | wireless only                  |
-| Query power info     | `0x??` | —                    | battery % + power state        |
-| Query effect info    | `0x??` | —                    | current RGB effect             |
-| Query charging state | `0x??` | —                    | wired present / charging       |
-| Query headset exist  | `0x??` | —                    | wireless only                  |
-| Query WDL status     | `0x??` | —                    | wireless link state            |
 
 ### Input reports (device → host)
 
