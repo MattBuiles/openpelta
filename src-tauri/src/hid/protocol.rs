@@ -42,25 +42,47 @@ pub const REPORT_TELEMETRY_IDENTITY: u8 = 0x2a;
 pub const REPORT_RF_IDENTITY: u8 = 0x3a;
 
 // ---------------------------------------------------------------------------
-// Operation opcodes (Phase 1 — TBD).
+// Operation opcodes (Phase 1 — in progress).
 //
-// Inventory of operations exposed by the vendor HID protocol (extracted from
-// `AacAudioHal_x64.dll`):
+// All operations flow through Report 0xCC. The first payload bytes encode the
+// opcode; remaining bytes carry parameters. Layout:
 //
-//   GET:  FWVersion, PowerInfo, ChargingState, HeadsetExist (wl),
+//   wire[0]   = REPORT_CMD (0xCC, prepended by the HID writer)
+//   wire[1..] = 64-byte payload — opcode at byte 1..2, params at byte 5+
+//
+// Each opcode below is extracted from `C_A501_Protocol::*` in the Windows HAL
+// `AacAudioHal_x64.dll` via radare2 disassembly.
+//
+// === Decoded so far ===
+//
+//   getFWVersion        opcode = [0x12, 0x00],         no params
+//   setSWLEDColor       opcode = [0x51, 0x30, 0, 0],   params = [R, G, B] at bytes 5..8
+//
+// === Still TBD ===
+//
+//   GET:  PowerInfo, ChargingState, HeadsetExist (wl),
 //         WDLStatus, WDLControlStatus, Language,
 //         LatencyMode (wl), PowerSavingMode (wl),
 //         SidetoneOnOff, SidetoneVolume, NROnOff,
 //         LEDOnOff, EffectInfo, DemoMode
 //
-//   SET:  LightEffect, SWLEDColor, SWModeOnOff (wl),
+//   SET:  LightEffect, SWModeOnOff (wl),
 //         NROnOff, DemoModeOnOff,
-//         LatencyMode (wl), DeviceWDLEnable (wl, pairing),
-//         Cmd (generic wrapper)
-//
-// All flow through Report 0xCC. The first payload bytes encode the opcode;
-// remaining bytes carry parameters. Reverse-engineering these byte patterns
-// is the Phase 1 deliverable.
+//         LatencyMode (wl), DeviceWDLEnable (wl), Cmd (generic)
+
+/// `getFWVersion` — request firmware version.
+/// Response (Input 0xCC) carries HW + FW versions cached at internal offsets
+/// 0xc3..0xca (formatted as `%02X.%02X.%02X.%02X`).
+pub const OPCODE_GET_FW_VERSION: [u8; 2] = [0x12, 0x00];
+
+/// `setSWLEDColor` — set direct (software-mode) RGB color.
+/// Payload layout after opcode:
+///   bytes 1..4 = [0x51, 0x30, 0x00, 0x00]  (opcode, including 2 reserved bytes)
+///   byte 5     = R
+///   byte 6     = G
+///   byte 7     = B
+///   bytes 8..  = 0x00 padding
+pub const OPCODE_SET_SW_LED_COLOR: [u8; 4] = [0x51, 0x30, 0x00, 0x00];
 //
 // NOT in the vendor HID protocol:
 //   - EQ / equalizer  → handled by ASUS AudioSDK (USB Audio Class extensions or
