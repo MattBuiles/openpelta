@@ -180,6 +180,75 @@ wire request : CC 12 00 00 ... (zero-padded to 65 bytes)
 Response arrives as Input report `0xCC`; the HAL extracts 8 version bytes
 and formats them as two `%02X.%02X.%02X.%02X` strings (HW and FW).
 
+## Live validation
+
+All commands below were exercised against a real wireless Pelta (PID 0x1b84)
+using `hidapitester` against UsagePage 0xFF00 / Usage 0x0001. No errors on
+write, response bytes echo the opcode and carry meaningful state.
+
+### `setSWLEDColor` — visually confirmed ✅
+
+Sent in sequence with 3 s between commands; LED tracked exactly:
+
+| Command (R, G, B) | Wire bytes (first 8)             | Observed LED |
+|-------------------|----------------------------------|--------------|
+| `(0xFF, 0, 0)`    | `CC 51 30 00 00 FF 00 00`        | red          |
+| `(0, 0xFF, 0)`    | `CC 51 30 00 00 00 FF 00`        | green        |
+| `(0, 0, 0xFF)`    | `CC 51 30 00 00 00 00 FF`        | blue         |
+| `(0xFF, 0xFF, 0xFF)` | `CC 51 30 00 00 FF FF FF`     | white        |
+
+→ Confirms opcode `0x51 0x30 0x00 0x00`, R/G/B at payload bytes 4/5/6, and
+that the wireless device honors software-mode color directly (no prior
+`setSWModeOnOff` was needed in this test).
+
+### GET responses — observed values (single sample, wireless idle, FW 03.00.04.00)
+
+Each response is the Input `0xCC` immediately following the corresponding
+Output `0xCC`. Bytes shown are the first useful bytes of the 64-byte payload;
+remainder is zero-padded.
+
+| Op                     | Echoed opcode | Data bytes      | Interpretation (best guess)             |
+|------------------------|---------------|-----------------|------------------------------------------|
+| `getFWVersion`         | `12 00`       | `03 00 04 00 03 00 04 00` | HW=03.00.04.00, FW=03.00.04.00 |
+| `getEffectInfo`        | `12 03`       | `04 32 FF 00`   | mode=4, param=0x32 (50%?), then `FF 00` |
+| `getPowerInfo`         | `12 07`       | `05 52 14 01`   | first byte may be battery state code, then 3 more state bytes |
+| `getChargingState`     | `12 08`       | `00`            | not charging                              |
+| `getPowerSavingMode`   | `12 0e`       | `00`            | disabled                                  |
+| `getLEDOnOff`          | `12 13`       | `01`            | LED master enabled                        |
+| `getDemoMode`          | `12 18`       | `00`            | disabled                                  |
+| `getSidetoneVolume`    | `12 19`       | `0A`            | level = 10 (range likely 0..100)          |
+| `getSidetoneOnOff`     | `12 24`       | `00`            | disabled                                  |
+| `getLanguage`          | `12 28`       | `01`            | locale id = 1                             |
+| `getWDLStatus`         | `12 29`       | `00`            | link OK / nominal                         |
+| `getWDLControlStatus`  | `12 33`       | `00`            |                                           |
+| `getLatencyMode`       | `12 52`       | `64`            | = 100 — NOT a bool; appears to be a level or threshold (range 0..100?) |
+| `getNROnOff`           | `41 20`       | `00`            | NR disabled                               |
+
+Notes:
+- `getLatencyMode` returning `0x64` is unexpected — the HAL header treats
+  this as a boolean toggle (`setLatencyMode` takes a single byte 0/1), but
+  the live read is `0x64 = 100`. May indicate latency-in-ms or a percentage
+  scale; the setter range needs to be probed.
+- `getHeadsetExist` was not run in this round (wireless-only and we already
+  had the dongle paired). To probe it, request with `12 00 00 01`.
+
+### Replay procedure (Windows)
+
+```pwsh
+# any GET
+.\hidapitester.exe `
+    --vidpid 0B05/1B84 --usagePage 0xFF00 --usage 0x0001 `
+    -l 64 -t 1500 --open `
+    --send-output 0xCC,<opcode byte 0>,<opcode byte 1> `
+    --read-input
+
+# any SET (single-byte param)
+.\hidapitester.exe `
+    --vidpid 0B05/1B84 --usagePage 0xFF00 --usage 0x0001 `
+    -l 64 --open `
+    --send-output 0xCC,<opcode byte 0>,<opcode byte 1>,0,0,<param>
+```
+
 Source: `fcn.18002e540` in HAL DLL (xref from `mutex_getFWVersion` log strings).
 
 ```
