@@ -1,65 +1,148 @@
 # ROG Pelta — USB HID Protocol
 
-Reverse-engineered protocol notes. **Work in progress.** Contributions welcome via PR.
+Reverse-engineered protocol notes. **Phase 0 complete** (device + transport + operation inventory). **Phase 1 in progress** (per-command byte payloads).
+
+> Internal ASUS codename: **A501** — found in firmware updater (`A501_FWUpdater_Headset.exe`) and Windows HAL classes (`C_A501_Protocol`, `C_A501_USB_Protocol`).
 
 ## Device identification
 
-| Variant | VID | PID | Source |
-|---------|-----|-----|--------|
-| Wireless dongle | `0x0b05` | `TBD` | `lsusb -d 0b05:` |
-| Wired USB-C | `0x0b05` | `TBD` | `lsusb -d 0b05:` |
+| Variant       | VID      | PID      | HAL class                | LED        | Notes                                  |
+|---------------|----------|----------|--------------------------|------------|----------------------------------------|
+| Wired USB-C   | `0x0b05` | `0x1b82` | `C_A501_USB_Protocol`    | RGB        | confirmed                              |
+| 2.4 GHz       | `0x0b05` | `0x1b84` | `C_A501_Protocol`        | RGB        | confirmed, dongle as separate composite |
+| Bluetooth     | `0x0b05` | `0x1b86` | `C_A501_Protocol` (mono) | mono-color | confirmed via ASUS config JSON; not yet enumerated live |
 
-To fill: run `scripts/probe-hid.sh` on Linux or USB Device Tree Viewer on Windows.
+Source: Windows `Get-PnpDevice` + `hidapitester --list-detail` + `C:\ProgramData\ASUS\ROG Live Service\DeviceDependentVersion\ROG PELTA\ROG PELTA.json`.
 
-## HID interfaces
+## USB composite device layout
 
-| Interface | Usage page | Usage | Purpose |
-|-----------|-----------|-------|---------|
-| 0 | TBD | TBD | Audio class (standard) |
-| 1 | TBD | TBD | Vendor control (commands live here) |
-| 2 | TBD | TBD | Telemetry / events |
+Each variant exposes (at minimum):
 
-## Report map
+| Interface | Class               | Purpose                                  |
+|-----------|---------------------|------------------------------------------|
+| `MI_00`   | USB Audio Class     | Headset audio streaming                  |
+| `MI_03`   | HID                 | Control plane (multiple top-level collections) |
 
-Each row: capture a single isolated action, diff bytes, record here.
+## HID collections on `MI_03`
+
+| Collection   | UsagePage | Usage    | Wired | 2.4 GHz | Purpose                                   |
+|--------------|-----------|----------|:-----:|:-------:|-------------------------------------------|
+| Consumer     | `0x000C`  | `0x0001` |  ✅   |   ✅    | Standard volume/play/mute keys            |
+| Telephony    | `0x000B`  | `0x0005` |  —    |   ✅    | Standard headset off-hook / mic mute      |
+| **Command**  | `0xFF00`  | `0x0001` |  ✅   |   ✅    | **Vendor command channel — Report `0xCC`** |
+| **RF state** | `0xFF07`  | `0x0212` |  —    |   ✅    | Wireless link / dongle telemetry          |
+| Telemetry    | `0xFF0B`  | `0x0104` |  ✅   |   ✅    | Generic device telemetry / identity       |
+
+The command channel descriptors are **byte-identical** between wired and 2.4 GHz → same protocol on both.
+
+### Command channel (Report `0xCC`)
+
+```
+Report ID:  0xCC
+Direction:  Output (host→device)  and  Input (device→host)
+Payload:    63 data bytes (64 incl. report ID)
+Transport:  HID interrupt I/O on MI_03 / Col02 (0xFF00, 0x0001)
+Semantics:  request / response. No spontaneous emission observed during 3s idle.
+```
+
+Report-ID-0xCC raw report descriptor (identical wired / wireless):
+
+```
+06 00 FF 09 01 A1 00 85 CC 09 01 15 00 26 FF 00
+75 08 95 3F 81 02 09 01 15 00 26 FF 00 75 08 95
+3F 91 02 C0
+```
+
+## Operation inventory
+
+The Windows HAL (`AacAudioHal_x64.dll`) implements two C++ classes for Pelta. Method names give a near-complete picture of what the vendor protocol supports.
+
+### `GET` operations (read state)
+
+| Operation             | Wired | Wireless | Description                                  |
+|-----------------------|:-----:|:--------:|----------------------------------------------|
+| `getFWVersion`        |  ✅   |    ✅    | Firmware version                             |
+| `getPowerInfo`        |  ✅   |    ✅    | Battery % + power state                      |
+| `getChargingState`    |  ✅   |    ✅    | Charging yes/no                              |
+| `getHeadsetExist`     |   —   |    ✅    | Dongle reports whether headset is in range  |
+| `getWDLStatus`        |  ✅   |    ✅    | Wireless Down-Link status                    |
+| `getWDLControlStatus` |  ✅   |    ✅    | WDL control plane status                     |
+| `getLanguage`         |  ✅   |    ✅    | Voice-prompt locale                          |
+| `getLatencyMode`      |   —   |    ✅    | Low-latency mode flag                        |
+| `getPowerSavingMode`  |   —   |    ✅    | Wireless sleep/PS state                      |
+| `getSidetoneOnOff`    |  ✅   |    ✅    | Sidetone enable                              |
+| `getSidetoneVolume`   |  ✅   |    ✅    | Sidetone level                               |
+| `getNROnOff`          |  ✅   |    ✅    | Mic AI noise reduction enable                |
+| `getLEDOnOff`         |  ✅   |    ✅    | Master LED enable                            |
+| `getEffectInfo`       |  ✅   |    ✅    | Current RGB effect + parameters              |
+| `getDemoMode`         |  ✅   |    ✅    | Demo loop state                              |
+
+### `SET` operations (write state)
+
+| Operation             | Wired | Wireless | Description                                  |
+|-----------------------|:-----:|:--------:|----------------------------------------------|
+| `setLightEffect`      |  ✅   |    ✅    | RGB effect mode (Static / Breathing / …)     |
+| `setSWLEDColor`       |  ✅   |    ✅    | Direct color in software mode (R/G/B)        |
+| `setSWModeOnOff`      |   —   |    ✅    | Toggle direct-control mode                   |
+| `setNROnOff`          |  ✅   |    ✅    | Noise reduction on/off                       |
+| `setDemoModeOnOff`    |  ✅   |    ✅    | Demo loop on/off                             |
+| `setLatencyMode`      |   —   |    ✅    | Low-latency on/off                           |
+| `setDeviceWDLEnable`  |   —   |    ✅    | Pairing on/off                               |
+| `setCmd`              |  ✅   |    ✅    | Generic command wrapper (likely covers more) |
+
+### Operations **not** in the vendor HID protocol
+
+| Function          | Where it actually lives                                  |
+|-------------------|----------------------------------------------------------|
+| EQ / equalizer    | ASUS `AudioSDK` module — USB Audio Class extensions or software DSP. Not reachable via Report `0xCC`. |
+| Sleep timer       | Pelta does not expose this. Other ASUS headsets (RH200WLE, RH300WL) do. |
+| Mic mute (vendor) | Hardware/firmware-controlled. Reported to host via standard Telephony usage page on a separate HID collection — no vendor SET command. |
+| Setters for sidetone level | No dedicated `setSidetoneOnOff` / `setSidetoneVolume` symbol found. Likely routed through the generic `setCmd` wrapper with a sub-opcode (TBD). |
+
+## Report map (Phase 1 — TBD)
+
+For each operation above, fill in the 64-byte template once decoded:
+
+```
+Byte 0    : 0xCC                (report ID)
+Byte 1    : <opcode>            (TBD per operation)
+Byte 2..N : <parameters>        (TBD)
+Byte ..63 : 0x00 padding
+```
 
 ### Output reports (host → device)
 
-| Action | Report ID | Payload bytes | Notes |
-|--------|-----------|---------------|-------|
-| RGB Static | `0x??` | `[mode, R, G, B, speed, ...]` | TBD |
-| RGB Breathing | `0x??` | `[mode, R, G, B, speed, ...]` | TBD |
-| RGB Off | `0x??` | `[0, 0, 0, 0, 0, ...]` | TBD |
-| EQ apply | `0x??` | `[band0_gain, ..., band9_gain]` | Range? |
-| Sidetone | `0x??` | `[level]` | Range 0-100? |
-| Mic mute | `0x??` | `[1 or 0]` | TBD |
-| Sleep timer | `0x??` | `[mins_lo, mins_hi]` | TBD |
-| Firmware query | `0x??` | `[query_op]` | TBD |
+| Action                  | Opcode byte | Params       | Notes        |
+|-------------------------|:-----------:|--------------|--------------|
+| Set RGB effect mode     | `0x??`      | mode index, speed, …  | from `setLightEffect` |
+| Set static color (SW)   | `0x??`      | R, G, B               | from `setSWLEDColor`  |
+| Toggle SW direct mode   | `0x??`      | bool                  | wireless only |
+| Set noise reduction     | `0x??`      | bool                  | from `setNROnOff`     |
+| Set demo mode           | `0x??`      | bool                  | from `setDemoModeOnOff` |
+| Set latency mode        | `0x??`      | bool                  | wireless only |
+| Enable pairing          | `0x??`      | bool                  | wireless only |
+| Query FW version        | `0x??`      | —                     | request, response in Input 0xCC |
+| Query power info        | `0x??`      | —                     | request, response in Input 0xCC |
+| Query effect info       | `0x??`      | —                     | request, response in Input 0xCC |
 
 ### Input reports (device → host)
 
-| Event | Report ID | Payload bytes | Notes |
-|-------|-----------|---------------|-------|
-| Battery level | `0x??` | `[percent]` | TBD |
-| Button (mic mute) | `0x??` | `[state]` | TBD |
-| Charging state | `0x??` | TBD | TBD |
-
-### Feature reports (bidirectional)
-
-| Feature | Report ID | Length | Notes |
-|---------|-----------|--------|-------|
-| Firmware version | `0x??` | TBD | TBD |
-| Device info | `0x??` | TBD | TBD |
+Same Report ID `0xCC`. Returned in response to a GET request — no spontaneous emission observed.
 
 ## Methodology
 
-1. **Find VID/PID** — `scripts/probe-hid.sh` (Linux) or USB Device Tree Viewer (Windows).
-2. **Capture baseline** — record `idle_30s.pcap` with nothing happening.
-3. **Capture per-action** — for each control, capture isolated single change.
-4. **Diff** — open in Wireshark, filter by `usb.src` and `usb.dst` matching Pelta address. Compare per-action vs baseline.
-5. **Identify report ID** — first byte of HID output is the report ID.
-6. **Document** — fill table above with `[report_id]` and payload pattern.
-7. **Replay** — `hidapitester --vidpid 0b05/PID --send-output 0x...` and confirm device reacts.
+Phase 0 used **static reverse-engineering** of the Windows HAL DLL rather than packet capture, because the Armoury Crate UI is unreliable on this hardware (it can launch but crashes when navigating to the Pelta device page on some setups), which makes timed Wireshark captures fragile.
+
+Tools used:
+
+- `Get-PnpDevice` (Windows built-in) — enumerate USB devices
+- [`hidapitester`](https://github.com/todbot/hidapitester) — dump HID report descriptors and probe reports
+- [`radare2`](https://github.com/radareorg/radare2) (`rabin2 -z`) — extract strings and class symbols from `AacAudioHal_x64.dll`
+
+Phase 1 will combine:
+
+1. Function-by-function disassembly of each `C_A501_Protocol::mutex_*` method, locating the byte template it writes to Report `0xCC`.
+2. Replay validation via `hidapitester --send-output 0xCC,...` while observing the headset (LED color change, audible sidetone, battery readback matching reality).
 
 ## Reference: other reversing projects
 
