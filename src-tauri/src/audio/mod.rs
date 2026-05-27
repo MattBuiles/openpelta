@@ -18,7 +18,7 @@ pub struct AudioConfig {
     pub surround_enabled: bool,
 }
 
-pub trait AudioBackend {
+pub trait AudioBackend: Send + Sync {
     fn apply(&self, cfg: &AudioConfig) -> Result<()>;
     fn is_installed(&self) -> bool;
 }

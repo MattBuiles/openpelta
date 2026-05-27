@@ -1,156 +1,177 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
 
-  let name = $state("");
-  let greetMsg = $state("");
+  type Rgb = { r: number; g: number; b: number };
+  type PowerInfo = { raw_level: number; charging: boolean };
 
-  async function greet(event: Event) {
-    event.preventDefault();
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    greetMsg = await invoke("greet", { name });
+  let connected = $state(false);
+  let firmware = $state("—");
+  let power = $state<PowerInfo | null>(null);
+  let headsetPresent = $state<boolean | null>(null);
+  let lastError = $state("");
+
+  // LED
+  let colorHex = $state("#ff0000");
+  let effectMode = $state<"Static" | "Breathing" | "Wave" | "Rainbow" | "Off">("Static");
+  let intensity = $state(50);
+
+  // Audio / link
+  let noiseReduction = $state(false);
+  let latency = $state(100);
+  let demoMode = $state(false);
+  let sidetoneVol = $state<number | null>(null);
+  let sidetoneOn = $state<boolean | null>(null);
+
+  const LATENCY_PRESETS = [40, 60, 80, 100];
+
+  function hexToRgb(hex: string): Rgb {
+    const n = parseInt(hex.slice(1), 16);
+    return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff };
   }
+
+  async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T | undefined> {
+    try {
+      lastError = "";
+      return await invoke<T>(cmd, args);
+    } catch (e) {
+      lastError = String(e);
+      return undefined;
+    }
+  }
+
+  async function refresh() {
+    const fw = await call<string>("firmware_version");
+    connected = fw !== undefined;
+    if (fw !== undefined) firmware = fw;
+    power = (await call<PowerInfo>("power_info")) ?? null;
+    headsetPresent = (await call<boolean>("headset_present")) ?? null;
+    const led = await call<boolean>("led_enabled");
+    if (led !== undefined && !led) effectMode = "Off";
+    noiseReduction = (await call<boolean>("noise_reduction")) ?? false;
+    latency = (await call<number>("latency_mode")) ?? 100;
+    const st = await call<[number, boolean]>("sidetone");
+    if (st) { sidetoneVol = st[0]; sidetoneOn = st[1]; }
+  }
+
+  async function applyLed() {
+    const color = hexToRgb(colorHex);
+    await call("set_rgb", { mode: effectMode, color, intensity });
+  }
+
+  async function toggleNr() {
+    noiseReduction = !noiseReduction;
+    await call("set_noise_reduction", { on: noiseReduction });
+  }
+
+  async function toggleDemo() {
+    demoMode = !demoMode;
+    await call("set_demo_mode", { on: demoMode });
+  }
+
+  async function setLatency(ms: number) {
+    latency = ms;
+    await call("set_latency_mode", { valueMs: ms });
+  }
+
+  $effect(() => { refresh(); });
 </script>
 
-<main class="container">
-  <h1>Welcome to Tauri + Svelte</h1>
+<main class="wrap">
+  <header>
+    <h1>OpenPelta</h1>
+    <span class="status" class:ok={connected}>
+      {connected ? "Connected" : "Not connected"}
+    </span>
+  </header>
 
-  <div class="row">
-    <a href="https://vite.dev" target="_blank">
-      <img src="/vite.svg" class="logo vite" alt="Vite Logo" />
-    </a>
-    <a href="https://tauri.app" target="_blank">
-      <img src="/tauri.svg" class="logo tauri" alt="Tauri Logo" />
-    </a>
-    <a href="https://svelte.dev" target="_blank">
-      <img src="/svelte.svg" class="logo svelte-kit" alt="SvelteKit Logo" />
-    </a>
-  </div>
-  <p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
+  {#if lastError}
+    <div class="error">{lastError}</div>
+  {/if}
 
-  <form class="row" onsubmit={greet}>
-    <input id="greet-input" placeholder="Enter a name..." bind:value={name} />
-    <button type="submit">Greet</button>
-  </form>
-  <p>{greetMsg}</p>
+  <section class="card">
+    <h2>Device</h2>
+    <dl>
+      <dt>Firmware</dt><dd>{firmware}</dd>
+      <dt>Battery (raw)</dt><dd>{power ? power.raw_level : "—"}{power?.charging ? " ⚡" : ""}</dd>
+      <dt>Headset present</dt><dd>{headsetPresent === null ? "—" : headsetPresent ? "yes" : "no"}</dd>
+      <dt>Sidetone</dt><dd>{sidetoneVol === null ? "—" : `${sidetoneVol}${sidetoneOn ? "" : " (off)"}`}</dd>
+    </dl>
+    <button onclick={refresh}>Refresh</button>
+  </section>
+
+  <section class="card">
+    <h2>Lighting</h2>
+    <div class="row">
+      <label>Color <input type="color" bind:value={colorHex} /></label>
+      <label>Mode
+        <select bind:value={effectMode}>
+          <option value="Off">Off</option>
+          <option value="Static">Static</option>
+          <option value="Breathing">Breathing</option>
+          <option value="Wave">Wave</option>
+          <option value="Rainbow">Rainbow</option>
+        </select>
+      </label>
+    </div>
+    <label>Intensity {intensity}
+      <input type="range" min="0" max="100" bind:value={intensity} />
+    </label>
+    <button onclick={applyLed}>Apply lighting</button>
+  </section>
+
+  <section class="card">
+    <h2>Audio &amp; Link</h2>
+    <label class="toggle">
+      <input type="checkbox" checked={noiseReduction} onchange={toggleNr} />
+      Mic noise reduction
+    </label>
+    <label class="toggle">
+      <input type="checkbox" checked={demoMode} onchange={toggleDemo} />
+      Demo mode
+    </label>
+    <div class="latency">
+      <span>Wireless latency</span>
+      <div class="row">
+        {#each LATENCY_PRESETS as ms}
+          <button class:active={latency === ms} onclick={() => setLatency(ms)}>{ms} ms</button>
+        {/each}
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <small>EQ, sidetone level and mic mute are not yet wired (see docs/protocol.md).</small>
+  </footer>
 </main>
 
 <style>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.svelte-kit:hover {
-  filter: drop-shadow(0 0 2em #ff3e00);
-}
-
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
   :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
+    font-family: Inter, system-ui, sans-serif;
+    color: #e8e8ea;
+    background: #16161a;
   }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
+  .wrap { max-width: 560px; margin: 0 auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
+  header { display: flex; align-items: center; justify-content: space-between; }
+  h1 { font-size: 1.4rem; margin: 0; }
+  h2 { font-size: 0.95rem; margin: 0 0 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; }
+  .status { font-size: 0.8rem; padding: 0.2rem 0.6rem; border-radius: 999px; background: #3a2b2b; color: #f0a0a0; }
+  .status.ok { background: #1f3a2b; color: #8ce0a8; }
+  .error { background: #3a2b2b; color: #f0a0a0; padding: 0.6rem 0.8rem; border-radius: 8px; font-size: 0.85rem; }
+  .card { background: #1e1e24; border: 1px solid #2a2a32; border-radius: 12px; padding: 1rem 1.2rem; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 0.3rem 1rem; margin: 0 0 0.8rem; font-size: 0.9rem; }
+  dt { opacity: 0.6; }
+  dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .row { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+  label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; }
+  .row label { flex-direction: row; align-items: center; gap: 0.5rem; }
+  .toggle { flex-direction: row; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+  input[type="range"] { width: 100%; }
+  .latency { margin-top: 0.5rem; }
   button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
+    background: #2a2a32; color: #e8e8ea; border: 1px solid #3a3a44;
+    border-radius: 8px; padding: 0.5rem 0.9rem; cursor: pointer; font-size: 0.85rem;
   }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
-
+  button:hover { border-color: #5a5a66; }
+  button.active { background: #2f4a6a; border-color: #4a7ab0; }
+  footer { text-align: center; opacity: 0.5; }
 </style>

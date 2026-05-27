@@ -141,16 +141,6 @@ pub const OP_SET_NR_ON_OFF: [u8; 2]         = [0x41, 0x02];
 //   - Mic mute (vendor)    → hardware/firmware-controlled; reported via the
 //                             standard Telephony usage page on a separate
 //                             HID collection.
-//
-// Legacy aliases — the existing pelta.rs scaffolding still uses these names.
-// Every command flows through REPORT_CMD; only the payload opcodes differ.
-pub const REPORT_BATTERY: u8 = REPORT_CMD;
-pub const REPORT_SIDETONE: u8 = REPORT_CMD;
-pub const REPORT_FIRMWARE: u8 = REPORT_CMD;
-pub const REPORT_RGB: u8 = REPORT_CMD;
-pub const REPORT_EQ: u8 = REPORT_CMD;          // EQ is via AudioSDK, not 0xCC
-pub const REPORT_MIC_MUTE: u8 = REPORT_CMD;    // mic mute is standard Telephony
-pub const REPORT_SLEEP_TIMER: u8 = REPORT_CMD; // Pelta does not expose this
 
 /// Build a 65-byte wire frame: `[0xCC, opcode_bytes..., 0x00 padding]`.
 /// `params` (if any) are placed starting at payload byte 4 (i.e. wire byte 5).

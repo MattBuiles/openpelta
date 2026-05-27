@@ -209,7 +209,7 @@ remainder is zero-padded.
 
 | Op                     | Echoed opcode | Data bytes      | Interpretation (best guess)             |
 |------------------------|---------------|-----------------|------------------------------------------|
-| `getFWVersion`         | `12 00`       | `03 00 04 00 03 00 04 00` | HW=03.00.04.00, FW=03.00.04.00 |
+| `getFWVersion`         | `12 00`       | `03 00 04 00 03 00 04 00` | 8 version bytes (4 HW + 4 FW). Exact field anchor within the payload still to be pinned against the HAL's parse offset; the data region begins at payload byte 4 like every other GET. |
 | `getEffectInfo`        | `12 03`       | `04 32 FF 00`   | mode=4, param=0x32 (50%?), then `FF 00` |
 | `getPowerInfo`         | `12 07`       | `05 52 14 01`   | first byte may be battery state code, then 3 more state bytes |
 | `getChargingState`     | `12 08`       | `00`            | not charging                              |
