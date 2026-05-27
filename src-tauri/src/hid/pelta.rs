@@ -38,26 +38,37 @@ impl Pelta {
 
     /// Request/response. Sends the opcode, then reads the Input 0xCC reply.
     /// Returns the 64-byte payload (report ID stripped).
+    ///
+    /// Because the device handle stays open for the lifetime of the app,
+    /// Input reports queue up — a naive read would return the reply to a
+    /// *previous* query, shifting every result. To stay aligned we (1) drain
+    /// any stale reports before writing, and (2) read until we see a reply
+    /// whose echoed opcode matches what we just sent.
     fn query(&self, opcode: &[u8]) -> Result<[u8; CMD_PAYLOAD_LEN]> {
-        let frame = build_frame(opcode, &[]);
         let dev = self.device.lock().unwrap();
+
+        // (1) Drain stale input reports (non-blocking).
+        let mut scratch = [0u8; 1 + CMD_PAYLOAD_LEN];
+        while dev.read_timeout(&mut scratch, 0)? > 0 {}
+
+        // (2) Send the request.
+        let frame = build_frame(opcode, &[]);
         dev.write(&frame)?;
 
-        let mut buf = [0u8; 1 + CMD_PAYLOAD_LEN];
-        let n = dev.read_timeout(&mut buf, 1000)?;
-        if n == 0 {
-            return Err(anyhow!("no response to query opcode {:02x?}", opcode));
+        // (3) Read until the echoed opcode matches.
+        for _ in 0..8 {
+            let mut buf = [0u8; 1 + CMD_PAYLOAD_LEN];
+            let n = dev.read_timeout(&mut buf, 1000)?;
+            if n == 0 {
+                break;
+            }
+            if buf[0] == REPORT_CMD && buf[1..1 + opcode.len()] == *opcode {
+                let mut payload = [0u8; CMD_PAYLOAD_LEN];
+                payload.copy_from_slice(&buf[1..]);
+                return Ok(payload);
+            }
         }
-        if buf[0] != REPORT_CMD {
-            return Err(anyhow!(
-                "unexpected response report id {:#04x} (want {:#04x})",
-                buf[0],
-                REPORT_CMD
-            ));
-        }
-        let mut payload = [0u8; CMD_PAYLOAD_LEN];
-        payload.copy_from_slice(&buf[1..]);
-        Ok(payload)
+        Err(anyhow!("no matching response for opcode {:02x?}", opcode))
     }
 
     /// First data byte of a GET response (payload index 4 == wire byte 5).
