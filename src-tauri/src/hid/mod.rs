@@ -36,11 +36,14 @@ pub enum RgbMode {
 /// Power/connection snapshot returned by [`PeltaDevice::power_info`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PowerInfo {
-    /// Raw first byte of the getPowerInfo response. The mapping from this
-    /// value to a battery percentage still needs calibration against a real
-    /// charge/discharge cycle, so it is exposed raw for now.
-    pub raw_level: u8,
+    /// Best-guess battery percentage — second data byte of the getPowerInfo
+    /// response (observed `0x52` = 82, a plausible level). Still to be
+    /// confirmed against a real charge/discharge cycle.
+    pub percent: u8,
     pub charging: bool,
+    /// The four data bytes of the getPowerInfo response, exposed for debugging
+    /// the still-uncertain battery encoding.
+    pub raw: [u8; 4],
 }
 
 /// The vendor control surface of the ROG Pelta, as reverse-engineered in

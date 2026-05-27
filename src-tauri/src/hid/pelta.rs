@@ -92,9 +92,16 @@ impl PeltaDevice for Pelta {
     }
 
     fn power_info(&self) -> Result<PowerInfo> {
-        let raw_level = self.query_byte(&OP_GET_POWER_INFO)?;
+        // getPowerInfo data region is payload[4..8] (observed `05 52 14 01`).
+        // payload[5] (0x52 = 82) is the likely battery percentage.
+        let p = self.query(&OP_GET_POWER_INFO)?;
+        let raw = [p[4], p[5], p[6], p[7]];
         let charging = self.query_byte(&OP_GET_CHARGING_STATE)? != 0;
-        Ok(PowerInfo { raw_level, charging })
+        Ok(PowerInfo {
+            percent: raw[1],
+            charging,
+            raw,
+        })
     }
 
     fn headset_present(&self) -> Result<bool> {

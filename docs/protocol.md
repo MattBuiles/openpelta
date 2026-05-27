@@ -245,9 +245,10 @@ Notes:
 
 | Operation           | Why deferred                                              |
 |---------------------|-----------------------------------------------------------|
+| Sidetone **setter** | The HAL exposes only `getSidetoneVolume` / `getSidetoneOnOff`, no setter. A live opcode sweep around the `0x12`/`0x51`/`0x41` families (`51 19`, `51 24`, `41 19`, `41 18`, `41 24`, `51 18`, `51 1A`) failed to move the value — it stays at the read-back `0x0A`. Strong evidence the sidetone level is a **USB Audio Class feature-unit control**, not a vendor HID command (consistent with the HAL only reading it for display). Implementing it needs the Windows Core Audio / Kernel Streaming property path, not Report 0xCC. |
 | `setSWModeOnOff`    | Uses a different HID writer (`fcn.18002b7b0`); likely targets a different report ID or the RF state collection (0xFF07). Needs separate replay with the right channel. |
 | `setDeviceWDLEnable`| Toggling pairing live would disconnect the headset. Defer until we have a recover-by-cable plan. |
-| Battery calibration | Requires running the headset down on battery and comparing `getPowerInfo` reads against an external % display over hours. |
+| Battery calibration | Requires running the headset down on battery and comparing `getPowerInfo` reads against an external % display over hours. The response `05 52 14 01` has a plausible `0x52 = 82` second byte that may be the real percentage — needs confirming. |
 | Bluetooth variant   | PID `0x1b86` is documented in the ASUS config but the device has not been enumerated live in BT mode. |
 
 ### Replay procedure (Windows)
