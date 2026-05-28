@@ -5,6 +5,8 @@ pub mod hotkeys;
 pub mod profiles;
 pub mod rgb;
 pub mod tray;
+#[cfg(target_os = "windows")]
+pub mod win_audio;
 
 use std::sync::Mutex;
 
@@ -232,6 +234,24 @@ fn install_eq_backend() -> Result<String, String> {
     }
 }
 
+/// Mic mute is a USB Audio Class control, not a vendor command — handled
+/// here through Windows Core Audio (default communications capture endpoint).
+#[tauri::command]
+fn mic_mute() -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    { win_audio::get_mic_mute().map_err(|e| e.to_string()) }
+    #[cfg(not(target_os = "windows"))]
+    { Err("mic mute is currently Windows-only".into()) }
+}
+
+#[tauri::command]
+fn set_mic_mute(mute: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    { win_audio::set_mic_mute(mute).map_err(|e| e.to_string()) }
+    #[cfg(not(target_os = "windows"))]
+    { Err("mic mute is currently Windows-only".into()) }
+}
+
 /// EQ does not flow through the device — it is applied by the host audio
 /// backend (Equalizer APO on Windows, EasyEffects on Linux). Returns an error
 /// if no supported backend is installed.
@@ -261,6 +281,27 @@ fn save_profiles(
         .map_err(|e| e.to_string())
 }
 
+/// Push every device-side setting from a profile to the headset (and to the
+/// audio backend for EQ). The frontend uses this when the user picks a
+/// profile from the dropdown.
+#[tauri::command]
+fn apply_profile(state: tauri::State<AppState>, profile: Profile) -> Result<(), String> {
+    with_device(state.inner(), |d| {
+        d.set_rgb(profile.rgb.mode, profile.rgb.color, profile.rgb.speed)?;
+        d.set_noise_reduction(profile.nr)?;
+        // setLatencyMode rejects values it doesn't know about; skip silently
+        // if the saved profile carries something unusual rather than erroring.
+        let _ = d.set_latency_mode(profile.latency_ms);
+        Ok(())
+    })?;
+    if let Some(backend) = audio::detect() {
+        backend
+            .apply(&profile.eq)
+            .map_err(|e| format!("EQ backend: {e}"))?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt::init();
@@ -272,7 +313,7 @@ pub fn run() {
             Some(vec!["--autostart"]),
         ))
         .setup(|app| {
-            use tauri::menu::{Menu, MenuItem};
+            use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
             use tauri::tray::TrayIconBuilder;
             use tauri::Manager;
 
@@ -285,8 +326,11 @@ pub fn run() {
             }
 
             let show = MenuItem::with_id(app, "show", "Show OpenPelta", true, None::<&str>)?;
+            let mic = MenuItem::with_id(app, "tray_mic", "Toggle mic mute", true, None::<&str>)?;
+            let nr = MenuItem::with_id(app, "tray_nr", "Toggle noise reduction", true, None::<&str>)?;
+            let sep = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &sep, &mic, &nr, &sep, &quit])?;
 
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -298,6 +342,19 @@ pub fn run() {
                             let _ = w.show();
                             let _ = w.set_focus();
                         }
+                    }
+                    "tray_mic" => {
+                        #[cfg(target_os = "windows")]
+                        if let Ok(cur) = win_audio::get_mic_mute() {
+                            let _ = win_audio::set_mic_mute(!cur);
+                        }
+                    }
+                    "tray_nr" => {
+                        let state: tauri::State<AppState> = app.state();
+                        let _ = with_device(state.inner(), |d| {
+                            let cur = d.noise_reduction()?;
+                            d.set_noise_reduction(!cur)
+                        });
                     }
                     "quit" => app.exit(0),
                     _ => {}
@@ -341,11 +398,14 @@ pub fn run() {
             set_noise_reduction,
             set_latency_mode,
             set_demo_mode,
+            mic_mute,
+            set_mic_mute,
             audio_backend_status,
             install_eq_backend,
             set_eq,
             list_profiles,
             save_profiles,
+            apply_profile,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

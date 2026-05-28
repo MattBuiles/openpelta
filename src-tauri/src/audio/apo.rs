@@ -39,6 +39,11 @@ impl EqualizerApo {
     }
 
     fn render(cfg: &AudioConfig) -> String {
+        if !cfg.enabled {
+            // Keep the file present (so the Include in config.txt still
+            // resolves) but make it a no-op so the audio chain is pristine.
+            return "# OpenPelta EQ disabled\n".into();
+        }
         let mut out = String::new();
         out.push_str("Device: ROG Pelta\n");
         out.push_str(&format!("Preamp: {:.1} dB\n", cfg.preamp_db));

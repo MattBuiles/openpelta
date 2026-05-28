@@ -4,6 +4,17 @@
   type Rgb = { r: number; g: number; b: number };
   type PowerInfo = { percent: number; charging: boolean; raw: number[] };
   type Tab = "lighting" | "audio" | "eq" | "power" | "about";
+  type EqConfig = {
+    bands: { freq_hz: number; gain_db: number; q: number }[];
+    preamp_db: number; surround_enabled: boolean; enabled: boolean;
+  };
+  type Profile = {
+    name: string;
+    rgb: { mode: string; color: Rgb; speed: number };
+    eq: EqConfig;
+    nr: boolean;
+    latency_ms: number;
+  };
 
   let tab = $state<Tab>("lighting");
   let connected = $state(false);
@@ -26,12 +37,14 @@
   let noiseReduction = $state(false);
   let demoMode = $state(false);
   let latency = $state(100);
+  let micMuted = $state(false);
 
   // EQ (host-side, via Equalizer APO / EasyEffects)
   const EQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
   let eqGains = $state<number[]>(Array(10).fill(0));
   let preamp = $state(0);
   let eqStatus = $state("");
+  let eqEnabled = $state(true);
   let eqBackend = $state<string | null>(null);
   let installing = $state(false);
 
@@ -85,6 +98,7 @@
     latency = (await call<number>("latency_mode")) ?? 100;
     const st = await call<[number, boolean]>("sidetone");
     if (st) { sidetoneVol = st[0]; sidetoneOn = st[1]; }
+    micMuted = (await call<boolean>("mic_mute")) ?? false;
     busy = false;
   }
 
@@ -121,9 +135,14 @@
       bands: EQ_FREQS.map((f, i) => ({ freq_hz: f, gain_db: eqGains[i], q: 1.0 })),
       preamp_db: preamp,
       surround_enabled: false,
+      enabled: eqEnabled,
     };
     const ok = await call("set_eq", { config });
-    eqStatus = ok === undefined ? "" : "applied ✓";
+    eqStatus = ok === undefined ? "" : (eqEnabled ? "applied ✓" : "bypassed ✓");
+  }
+  async function toggleEqEnabled() {
+    eqEnabled = !eqEnabled;
+    await applyEq();
   }
   function resetEq() {
     eqGains = Array(10).fill(0);
@@ -144,6 +163,10 @@
     noiseReduction = !noiseReduction;
     await call("set_noise_reduction", { on: noiseReduction });
   }
+  async function toggleMicMute() {
+    micMuted = !micMuted;
+    await call("set_mic_mute", { mute: micMuted });
+  }
   async function toggleDemo() {
     demoMode = !demoMode;
     await call("set_demo_mode", { on: demoMode });
@@ -161,6 +184,76 @@
 
   // Autostart toggle wired straight to the tauri-plugin-autostart commands.
   let autostart = $state(false);
+
+  // Profiles
+  let profiles = $state<Profile[]>([]);
+  let activeProfile = $state<string>("");
+  let renaming = $state(false);
+  let newProfileName = $state("");
+
+  function currentRgb(): Rgb { return hexToRgb(colorHex); }
+  function rgbToHex(c: Rgb): string {
+    return "#" + [c.r, c.g, c.b].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  function snapshotProfile(name: string): Profile {
+    return {
+      name,
+      rgb: { mode: effectMode, color: currentRgb(), speed: intensity },
+      eq: {
+        bands: EQ_FREQS.map((f, i) => ({ freq_hz: f, gain_db: eqGains[i], q: 1.0 })),
+        preamp_db: preamp,
+        surround_enabled: false,
+        enabled: eqEnabled,
+      },
+      nr: noiseReduction,
+      latency_ms: latency,
+    };
+  }
+  async function loadProfiles() {
+    profiles = (await call<Profile[]>("list_profiles")) ?? [];
+  }
+  async function saveProfilesPersist(active: string | null) {
+    await call("save_profiles", { profiles, active });
+  }
+  async function commitNewProfile() {
+    const name = newProfileName.trim();
+    if (!name) { renaming = false; return; }
+    const others = profiles.filter((p) => p.name !== name);
+    profiles = [...others, snapshotProfile(name)];
+    activeProfile = name;
+    await saveProfilesPersist(name);
+    renaming = false;
+    newProfileName = "";
+  }
+  async function applyProfileByName(name: string) {
+    const p = profiles.find((x) => x.name === name);
+    if (!p) return;
+    effectMode = (p.rgb.mode as typeof effectMode) ?? "Static";
+    colorHex = rgbToHex(p.rgb.color);
+    intensity = p.rgb.speed;
+    noiseReduction = p.nr;
+    latency = p.latency_ms;
+    if (Array.isArray(p.eq.bands) && p.eq.bands.length === 10) {
+      eqGains = p.eq.bands.map((b) => b.gain_db);
+    }
+    preamp = p.eq.preamp_db;
+    eqEnabled = p.eq.enabled !== false;
+    eqPreset = "Custom";
+    activeProfile = name;
+    await call("apply_profile", { profile: p });
+    await saveProfilesPersist(name);
+  }
+  async function deleteActiveProfile() {
+    if (!activeProfile) return;
+    profiles = profiles.filter((p) => p.name !== activeProfile);
+    activeProfile = "";
+    await saveProfilesPersist(null);
+  }
+  async function overwriteActive() {
+    if (!activeProfile) return;
+    profiles = profiles.map((p) => (p.name === activeProfile ? snapshotProfile(activeProfile) : p));
+    await saveProfilesPersist(activeProfile);
+  }
   async function refreshAutostart() {
     autostart = (await call<boolean>("plugin:autostart|is_enabled")) ?? false;
   }
@@ -168,6 +261,26 @@
     autostart = !autostart;
     await call(autostart ? "plugin:autostart|enable" : "plugin:autostart|disable");
     await refreshAutostart();
+  }
+
+  // Low-battery notification — light poll every 5 min, fires the system
+  // notification once when the headset drops below the threshold (until it
+  // either crosses back above or starts charging again).
+  const BATTERY_THRESHOLD = 20;
+  let batteryAlerted = false;
+  async function pollBattery() {
+    const p = await call<PowerInfo>("power_info");
+    if (!p) return;
+    if (p.percent <= BATTERY_THRESHOLD && !p.charging && !batteryAlerted) {
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification("OpenPelta", {
+          body: `Pelta battery low — ${p.percent}% remaining`,
+          tag: "openpelta-battery",
+        });
+      }
+      batteryAlerted = true;
+    }
+    if (p.percent > BATTERY_THRESHOLD + 5 || p.charging) batteryAlerted = false;
   }
 
   // Persistence — every UI choice is mirrored to localStorage on change and
@@ -187,6 +300,7 @@
       if (Array.isArray(s.eqGains) && s.eqGains.length === 10) eqGains = s.eqGains;
       if (typeof s.preamp === "number") preamp = s.preamp;
       if (typeof s.eqPreset === "string") eqPreset = s.eqPreset;
+      if (typeof s.eqEnabled === "boolean") eqEnabled = s.eqEnabled;
       if (typeof s.tab === "string") tab = s.tab;
     } catch { /* corrupt entry → ignore */ }
     restored = true;
@@ -194,16 +308,26 @@
   function saveSettings() {
     if (!restored) return; // don't overwrite before we've read the old value
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      colorHex, effectMode, intensity, eqGains, preamp, eqPreset, tab,
+      colorHex, effectMode, intensity, eqGains, preamp, eqPreset, eqEnabled, tab,
     }));
   }
 
-  $effect(() => { loadSettings(); refresh(); refreshAutostart(); });
+  $effect(() => {
+    loadSettings();
+    refresh();
+    refreshAutostart();
+    loadProfiles();
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+    const interval = setInterval(pollBattery, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  });
   // Auto-save on any tracked change.
   $effect(() => {
     saveSettings();
     // Touch the deps so Svelte re-runs this effect when they change.
-    void [colorHex, effectMode, intensity, eqGains, preamp, eqPreset, tab];
+    void [colorHex, effectMode, intensity, eqGains, preamp, eqPreset, eqEnabled, tab];
   });
   // Re-detect the audio backend every time the user enters the EQ tab so a
   // freshly-installed APO is picked up without needing a manual refresh.
@@ -229,6 +353,37 @@
   {#if lastError}
     <div class="err">⚠ {lastError}</div>
   {/if}
+
+  <div class="profiles-bar">
+    <span class="cap">Profile</span>
+    {#if renaming}
+      <input
+        class="prof-input mono"
+        bind:value={newProfileName}
+        onkeydown={(e) => { if (e.key === "Enter") commitNewProfile(); if (e.key === "Escape") { renaming = false; newProfileName = ""; } }}
+        placeholder="name"
+        autofocus
+      />
+      <button class="ghost sm" onclick={commitNewProfile}>save</button>
+      <button class="ghost sm" onclick={() => { renaming = false; newProfileName = ""; }}>×</button>
+    {:else}
+      <select
+        class="prof-select mono"
+        value={activeProfile}
+        onchange={(e) => applyProfileByName((e.currentTarget as HTMLSelectElement).value)}
+      >
+        <option value="">— none —</option>
+        {#each profiles as p}
+          <option value={p.name}>{p.name}</option>
+        {/each}
+      </select>
+      <button class="ghost sm" title="Save current settings as a new profile" onclick={() => { renaming = true; newProfileName = ""; }}>+ new</button>
+      {#if activeProfile}
+        <button class="ghost sm" title="Overwrite the active profile with current settings" onclick={overwriteActive}>↓ save</button>
+        <button class="ghost sm danger" title="Delete the active profile" onclick={deleteActiveProfile}>✕</button>
+      {/if}
+    {/if}
+  </div>
 
   <nav class="tabs">
     {#each ["lighting", "audio", "eq", "power", "about"] as t}
@@ -265,6 +420,15 @@
 
     {#if tab === "audio"}
       <section class="panel">
+        <div class="explain">
+          <button class="toggle" class:on={micMuted} onclick={toggleMicMute}>
+            <span class="knob"></span>
+            <span class="t-label">Mute microphone</span>
+            <span class="mono state">{micMuted ? "MUTED" : "LIVE"}</span>
+          </button>
+          <small class="hint">Software mute on the Pelta's capture endpoint via Windows Core Audio — same as the volume mixer's mute button, but reachable from here, the tray, and (eventually) a global hotkey.</small>
+        </div>
+
         <div class="explain">
           <button class="toggle" class:on={noiseReduction} onclick={toggleNr}>
             <span class="knob"></span>
@@ -346,9 +510,15 @@
             </div>
           {/each}
         </div>
+        <button class="toggle" class:on={eqEnabled} onclick={toggleEqEnabled}>
+          <span class="knob"></span>
+          <span class="t-label">EQ active</span>
+          <span class="mono state">{eqEnabled ? "ON" : "BYPASS"}</span>
+        </button>
+
         <div class="row-btns">
           <button class="ghost" onclick={resetEq}>Reset</button>
-          <button class="apply" onclick={applyEq}>Apply EQ</button>
+          <button class="apply" onclick={applyEq} disabled={!eqEnabled}>Apply EQ</button>
         </div>
         {#if eqStatus}<span class="hint">{eqStatus}</span>{/if}
         <p class="note">EQ is applied by the system audio backend (Equalizer APO
@@ -604,6 +774,23 @@
 
   .explain { display: flex; flex-direction: column; gap: 0.35rem; }
   .explain .hint { padding: 0 0.2rem; line-height: 1.5; }
+
+  /* Profiles bar */
+  .profiles-bar {
+    display: flex; align-items: center; gap: 0.45rem;
+    padding: 0.5rem 1.1rem;
+    border-bottom: 1px solid var(--line);
+    background: #0f0f12;
+  }
+  .profiles-bar .cap { margin-right: 0.4rem; }
+  .prof-select, .prof-input {
+    background: #16161b; color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 0.35rem 0.55rem; font-size: 0.78rem; flex: 1; min-width: 0;
+  }
+  .prof-select:focus, .prof-input:focus { outline: none; border-color: #4a5562; }
+  .ghost.sm { padding: 0.35rem 0.6rem; font-size: 0.7rem; letter-spacing: 0.08em; }
+  .ghost.danger:hover { color: #ff7a8b; border-color: #5a2230; }
 
   /* battery */
   .battery { display: flex; flex-direction: column; gap: 0.5rem; }
