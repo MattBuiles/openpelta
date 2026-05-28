@@ -19,6 +19,7 @@ pub struct AudioConfig {
 }
 
 pub trait AudioBackend: Send + Sync {
+    fn name(&self) -> &'static str;
     fn apply(&self, cfg: &AudioConfig) -> Result<()>;
     fn is_installed(&self) -> bool;
 }

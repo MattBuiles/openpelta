@@ -8,13 +8,12 @@ pub mod tray;
 
 use std::sync::Mutex;
 
-use audio::{AudioBackend, AudioConfig};
+use audio::AudioConfig;
 use hid::{Pelta, PeltaDevice, PowerInfo, Rgb, RgbMode};
 use profiles::{Profile, ProfileStore};
 
 pub struct AppState {
     pub device: Mutex<Option<Pelta>>,
-    pub audio: Option<Box<dyn AudioBackend>>,
     pub store: ProfileStore,
 }
 
@@ -22,23 +21,35 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             device: Mutex::new(Pelta::open().ok()),
-            audio: audio::detect(),
             store: ProfileStore::new(),
         }
     }
 }
 
-/// Run a closure against the connected device, mapping the absence and any
-/// device error into a `String` for the frontend.
+/// Run a closure against the device, with lazy (re)open and auto-recovery:
+/// if the handle is None (never opened or dropped after a previous error),
+/// try to open it; if the closure fails, drop the handle so the next call
+/// retries from scratch — this covers the headset being unplugged/replugged
+/// or the wireless link dropping out while the app keeps running.
 fn with_device<T>(
     state: &AppState,
     f: impl FnOnce(&Pelta) -> anyhow::Result<T>,
 ) -> Result<T, String> {
-    let guard = state.device.lock().unwrap();
+    let mut guard = state.device.lock().unwrap();
+    if guard.is_none() {
+        *guard = Pelta::open().ok();
+    }
     let dev = guard
         .as_ref()
         .ok_or_else(|| "Pelta not connected".to_string())?;
-    f(dev).map_err(|e| e.to_string())
+    match f(dev) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            // Drop the stale handle so the next operation retries from scratch.
+            *guard = None;
+            Err(e.to_string())
+        }
+    }
 }
 
 // ---------- reads ----------
@@ -120,14 +131,50 @@ fn set_demo_mode(state: tauri::State<AppState>, on: bool) -> Result<(), String> 
     with_device(state.inner(), |d| d.set_demo_mode(on))
 }
 
+/// Force a fresh open of the device — used by the UI after a reconnect.
+#[tauri::command]
+fn reconnect(state: tauri::State<AppState>) -> Result<bool, String> {
+    let mut guard = state.device.lock().unwrap();
+    *guard = Pelta::open().ok();
+    Ok(guard.is_some())
+}
+
+/// Returns the name of the installed audio EQ backend, or `None` if none is
+/// found (detection is cheap — runs on every call so newly-installed backends
+/// are picked up without restarting the app).
+#[tauri::command]
+fn audio_backend_status() -> Option<String> {
+    audio::detect().map(|b| b.name().to_string())
+}
+
+/// Launch the installer for the platform's audio EQ backend. On Windows this
+/// runs `winget install` for Equalizer APO — the user has to walk through the
+/// installer (it asks which audio device to bind to) and reboot afterwards.
+#[tauri::command]
+fn install_eq_backend() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("winget")
+            .args([
+                "install", "-e", "--id", "peters.EqualizerAPO",
+                "--accept-source-agreements", "--accept-package-agreements",
+            ])
+            .spawn()
+            .map_err(|e| format!("Could not launch winget: {e}"))?;
+        Ok("Installer launched. Pick your Pelta audio device when prompted, then reboot.".into())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Auto-install is currently Windows-only".into())
+    }
+}
+
 /// EQ does not flow through the device — it is applied by the host audio
 /// backend (Equalizer APO on Windows, EasyEffects on Linux). Returns an error
 /// if no supported backend is installed.
 #[tauri::command]
-fn set_eq(state: tauri::State<AppState>, config: AudioConfig) -> Result<(), String> {
-    let backend = state
-        .audio
-        .as_ref()
+fn set_eq(config: AudioConfig) -> Result<(), String> {
+    let backend = audio::detect()
         .ok_or_else(|| "No audio EQ backend installed (Equalizer APO / EasyEffects)".to_string())?;
     backend.apply(&config).map_err(|e| e.to_string())
 }
@@ -159,6 +206,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
+            reconnect,
             firmware_version,
             power_info,
             headset_present,
@@ -172,6 +220,8 @@ pub fn run() {
             set_noise_reduction,
             set_latency_mode,
             set_demo_mode,
+            audio_backend_status,
+            install_eq_backend,
             set_eq,
             list_profiles,
             save_profiles,

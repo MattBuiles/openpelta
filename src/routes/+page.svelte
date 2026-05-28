@@ -32,6 +32,8 @@
   let eqGains = $state<number[]>(Array(10).fill(0));
   let preamp = $state(0);
   let eqStatus = $state("");
+  let eqBackend = $state<string | null>(null);
+  let installing = $state(false);
 
   const LATENCY_PRESETS = [40, 60, 80, 100];
   const EFFECTS: { id: typeof effectMode; label: string }[] = [
@@ -59,6 +61,10 @@
 
   async function refresh() {
     busy = true;
+    // Force a fresh device handle in case the headset was unplugged or the
+    // wireless link dropped while the app was running.
+    await call<boolean>("reconnect");
+    eqBackend = (await call<string | null>("audio_backend_status")) ?? null;
     const fw = await call<string>("firmware_version");
     connected = fw !== undefined;
     if (fw !== undefined) firmware = fw;
@@ -97,6 +103,16 @@
     eqGains = Array(10).fill(0);
     preamp = 0;
     eqStatus = "";
+  }
+  async function installEq() {
+    installing = true;
+    const msg = await call<string>("install_eq_backend");
+    eqStatus = msg ?? "";
+    installing = false;
+    // Re-check after a delay; user still needs to walk the installer.
+    setTimeout(async () => {
+      eqBackend = (await call<string | null>("audio_backend_status")) ?? null;
+    }, 4000);
   }
   async function toggleNr() {
     noiseReduction = !noiseReduction;
@@ -198,6 +214,21 @@
 
     {#if tab === "eq"}
       <section class="panel">
+        {#if eqBackend}
+          <div class="backend-ok">
+            <span class="cap">Backend</span>
+            <span class="mono">{eqBackend}</span>
+          </div>
+        {:else}
+          <div class="backend-missing">
+            <p>No system EQ backend detected.</p>
+            <button class="apply" onclick={installEq} disabled={installing}>
+              {installing ? "launching installer…" : "Install Equalizer APO"}
+            </button>
+            <small class="hint">Runs <span class="mono">winget install peters.EqualizerAPO</span>. You'll need to pick your Pelta audio device in the installer and reboot.</small>
+          </div>
+        {/if}
+
         <div class="field">
           <span class="cap">Preamp <em class="mono">{preamp > 0 ? "+" : ""}{preamp} dB</em></span>
           <input class="slider" type="range" min="-12" max="12" step="0.5" bind:value={preamp} />
@@ -446,6 +477,22 @@
     text-transform: uppercase; transition: all 0.14s;
   }
   .ghost:hover { color: var(--text); border-color: #3a3a44; }
+
+  .backend-ok {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.45rem 0.75rem; background: color-mix(in srgb, var(--ok) 12%, #101015);
+    border: 1px solid color-mix(in srgb, var(--ok) 30%, var(--line));
+    border-radius: 7px; margin-bottom: 0.2rem;
+  }
+  .backend-ok .mono { color: var(--ok); font-size: 0.78rem; }
+
+  .backend-missing {
+    display: flex; flex-direction: column; gap: 0.55rem;
+    padding: 0.85rem; border: 1px dashed #3a3a44; border-radius: 8px;
+    background: #101015;
+  }
+  .backend-missing p { margin: 0; font-size: 0.85rem; color: var(--text); }
+  .backend-missing .apply { margin: 0; }
 
   /* battery */
   .battery { display: flex; flex-direction: column; gap: 0.5rem; }

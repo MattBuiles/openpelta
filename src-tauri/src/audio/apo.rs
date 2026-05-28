@@ -38,12 +38,30 @@ impl EqualizerApo {
 }
 
 impl AudioBackend for EqualizerApo {
+    fn name(&self) -> &'static str {
+        "Equalizer APO"
+    }
+
     fn apply(&self, cfg: &AudioConfig) -> Result<()> {
         if !self.config_dir.exists() {
             return Err(anyhow!("Equalizer APO not installed at {:?}", self.config_dir));
         }
-        let path = self.config_dir.join("openpelta.txt");
-        fs::write(&path, Self::render(cfg))?;
+        let our_file = self.config_dir.join("openpelta.txt");
+        fs::write(&our_file, Self::render(cfg))?;
+
+        // Make sure APO's main config sources our preset, otherwise nothing
+        // we write here actually reaches the audio chain. Idempotent.
+        let main = self.config_dir.join("config.txt");
+        let include_line = "Include: openpelta.txt";
+        let current = fs::read_to_string(&main).unwrap_or_default();
+        if !current.contains(include_line) {
+            let updated = if current.is_empty() {
+                format!("{include_line}\n")
+            } else {
+                format!("{}\n{include_line}\n", current.trim_end())
+            };
+            fs::write(&main, updated)?;
+        }
         Ok(())
     }
 
