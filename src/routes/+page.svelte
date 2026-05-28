@@ -129,7 +129,16 @@
 
   let batteryPct = $derived(power ? Math.min(100, Math.max(0, power.percent)) : 0);
 
+  async function checkBackend() {
+    eqBackend = (await call<string | null>("audio_backend_status")) ?? null;
+  }
+
   $effect(() => { refresh(); });
+  // Re-detect the audio backend every time the user enters the EQ tab so a
+  // freshly-installed APO is picked up without needing a manual refresh.
+  $effect(() => {
+    if (tab === "eq") checkBackend();
+  });
 </script>
 
 <div class="app">
@@ -222,10 +231,15 @@
         {:else}
           <div class="backend-missing">
             <p>No system EQ backend detected.</p>
-            <button class="apply" onclick={installEq} disabled={installing}>
-              {installing ? "launching installer…" : "Install Equalizer APO"}
-            </button>
-            <small class="hint">Runs <span class="mono">winget install peters.EqualizerAPO</span>. You'll need to pick your Pelta audio device in the installer and reboot.</small>
+            <div class="row-btns">
+              <button class="ghost" onclick={checkBackend}>Check again</button>
+              <button class="apply" onclick={installEq} disabled={installing}>
+                {installing ? "launching installer…" : "Install Equalizer APO"}
+              </button>
+            </div>
+            <small class="hint">Downloads Equalizer APO from SourceForge and launches its installer.
+              In the wizard, pick the <span class="mono">ROG Pelta</span> output device and reboot.
+              The app will detect it automatically next time you open this tab.</small>
           </div>
         {/if}
 
