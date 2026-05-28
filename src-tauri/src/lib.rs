@@ -210,12 +210,21 @@ fn install_eq_backend() -> Result<String, String> {
             );
         }
 
-        // Step 4: launch the wizard.
-        std::process::Command::new(&installer)
+        // Step 4: launch the wizard. APO's installer needs elevation; spawning
+        // it directly fails with "requires elevation" (Win32 error 740). Going
+        // through PowerShell's `Start-Process -Verb RunAs` pops the standard
+        // UAC dialog for the user instead.
+        std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-WindowStyle", "Hidden",
+                "-Command",
+                &format!("Start-Process -FilePath '{}' -Verb RunAs", installer_str),
+            ])
             .spawn()
             .map_err(|e| format!("Could not launch installer: {e}"))?;
 
-        Ok("Installer launched. Pick your Pelta audio device in the wizard, then reboot.".into())
+        Ok("Installer launched — accept the UAC prompt, then walk the wizard (pick the Pelta audio device) and reboot.".into())
     }
     #[cfg(not(target_os = "windows"))]
     {
