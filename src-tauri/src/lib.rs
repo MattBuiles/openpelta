@@ -149,36 +149,73 @@ fn audio_backend_status() -> Option<String> {
 
 /// Download and launch the installer for the host audio EQ backend.
 ///
-/// Equalizer APO is not in winget, so we fetch the installer directly from
-/// SourceForge using the `curl` binary that ships with Windows 10+ (avoiding
-/// an HTTP client dependency in the Rust side). The installer itself is a
-/// GUI wizard — the user still has to pick which audio device to bind to and
-/// reboot — but the download + launch step is automated.
+/// Equalizer APO is hosted only on SourceForge, which now serves a JS
+/// interstitial instead of the binary on its `/download` URLs. The browser
+/// follows a `<meta refresh>` tag containing a one-time signed mirror URL —
+/// we replicate that here by fetching the interstitial page first, parsing
+/// the meta-refresh URL out of the HTML, and then downloading the real
+/// binary from it. The installer itself is a GUI wizard so the user still
+/// picks the audio device and reboots, but the download + launch step is
+/// fully automated.
 #[tauri::command]
 fn install_eq_backend() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        let url = "https://sourceforge.net/projects/equalizerapo/files/latest/download";
+        let page_url = "https://sourceforge.net/projects/equalizerapo/files/latest/download";
+
+        // Step 1: pull the interstitial HTML.
+        let html_out = std::process::Command::new("curl")
+            .args(["-sL", "-A", "Mozilla/5.0 (OpenPelta)", page_url])
+            .output()
+            .map_err(|e| format!("curl failed to start: {e}"))?;
+        if !html_out.status.success() {
+            return Err("Could not reach SourceForge to fetch the installer page.".into());
+        }
+        let html = String::from_utf8_lossy(&html_out.stdout);
+
+        // Step 2: dig the signed mirror URL out of `<meta http-equiv="refresh" ...>`.
+        let mirror_url = {
+            let after = html
+                .split(r#"meta http-equiv="refresh""#)
+                .nth(1)
+                .ok_or("SourceForge page format changed (no meta refresh)")?;
+            let url_start = after.find("url=").ok_or("No url= in meta refresh")? + 4;
+            let rest = &after[url_start..];
+            let end = rest
+                .find('"')
+                .ok_or("Malformed meta-refresh URL")?;
+            rest[..end].replace("&amp;", "&")
+        };
+
+        // Step 3: download the actual installer.
         let installer = std::env::temp_dir().join("EqualizerAPO-installer.exe");
         let installer_str = installer.to_string_lossy().to_string();
-
         let dl = std::process::Command::new("curl")
             .args([
                 "-sLfo", &installer_str,
                 "-A", "Mozilla/5.0 (OpenPelta)",
-                url,
+                &mirror_url,
             ])
             .status()
-            .map_err(|e| format!("curl failed to start: {e}"))?;
+            .map_err(|e| format!("curl download failed: {e}"))?;
         if !dl.success() {
-            return Err("Download failed. Check your internet connection.".into());
+            return Err("Installer download failed — try again in a moment.".into());
         }
 
+        // Sanity check: must be a real PE/EXE (starts with `MZ`).
+        let head = std::fs::read(&installer).unwrap_or_default();
+        if head.len() < 2 || &head[..2] != b"MZ" {
+            return Err(
+                "Downloaded file is not an executable; SourceForge may have changed its page format.".into(),
+            );
+        }
+
+        // Step 4: launch the wizard.
         std::process::Command::new(&installer)
             .spawn()
             .map_err(|e| format!("Could not launch installer: {e}"))?;
 
-        Ok("Installer launched. Follow the wizard, pick your Pelta audio device, then reboot.".into())
+        Ok("Installer launched. Pick your Pelta audio device in the wizard, then reboot.".into())
     }
     #[cfg(not(target_os = "windows"))]
     {
