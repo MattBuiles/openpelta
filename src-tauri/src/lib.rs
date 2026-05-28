@@ -147,21 +147,38 @@ fn audio_backend_status() -> Option<String> {
     audio::detect().map(|b| b.name().to_string())
 }
 
-/// Launch the installer for the platform's audio EQ backend. On Windows this
-/// runs `winget install` for Equalizer APO — the user has to walk through the
-/// installer (it asks which audio device to bind to) and reboot afterwards.
+/// Download and launch the installer for the host audio EQ backend.
+///
+/// Equalizer APO is not in winget, so we fetch the installer directly from
+/// SourceForge using the `curl` binary that ships with Windows 10+ (avoiding
+/// an HTTP client dependency in the Rust side). The installer itself is a
+/// GUI wizard — the user still has to pick which audio device to bind to and
+/// reboot — but the download + launch step is automated.
 #[tauri::command]
 fn install_eq_backend() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("winget")
+        let url = "https://sourceforge.net/projects/equalizerapo/files/latest/download";
+        let installer = std::env::temp_dir().join("EqualizerAPO-installer.exe");
+        let installer_str = installer.to_string_lossy().to_string();
+
+        let dl = std::process::Command::new("curl")
             .args([
-                "install", "-e", "--id", "peters.EqualizerAPO",
-                "--accept-source-agreements", "--accept-package-agreements",
+                "-sLfo", &installer_str,
+                "-A", "Mozilla/5.0 (OpenPelta)",
+                url,
             ])
+            .status()
+            .map_err(|e| format!("curl failed to start: {e}"))?;
+        if !dl.success() {
+            return Err("Download failed. Check your internet connection.".into());
+        }
+
+        std::process::Command::new(&installer)
             .spawn()
-            .map_err(|e| format!("Could not launch winget: {e}"))?;
-        Ok("Installer launched. Pick your Pelta audio device when prompted, then reboot.".into())
+            .map_err(|e| format!("Could not launch installer: {e}"))?;
+
+        Ok("Installer launched. Follow the wizard, pick your Pelta audio device, then reboot.".into())
     }
     #[cfg(not(target_os = "windows"))]
     {
