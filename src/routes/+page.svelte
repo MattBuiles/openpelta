@@ -44,6 +44,17 @@
     { id: "Rainbow", label: "Rainbow" },
   ];
 
+  // EQ presets — gains per band [31, 62, 125, 250, 500, 1k, 2k, 4k, 8k, 16k] Hz.
+  const EQ_PRESETS: Record<string, { gains: number[]; preamp: number }> = {
+    Flat:         { gains: [ 0,  0,  0,  0, 0, 0,  0,  0,  0,  0], preamp: 0 },
+    "Bass Boost": { gains: [ 6,  5,  4,  2, 0, 0,  0,  0,  0,  0], preamp: -2 },
+    Treble:       { gains: [ 0,  0,  0,  0, 0, 1,  2,  3,  5,  6], preamp: -2 },
+    Vocal:        { gains: [-2, -1,  0,  1, 2, 3,  2,  1,  0, -1], preamp: 0 },
+    "V-Shape":    { gains: [ 5,  4,  2,  0,-2,-2,  0,  2,  4,  5], preamp: -3 },
+    Loudness:     { gains: [ 6,  3,  0, -1, 0, 1,  0, -1,  3,  6], preamp: -3 },
+  };
+  let eqPreset = $state<keyof typeof EQ_PRESETS | "Custom">("Custom");
+
   function hexToRgb(hex: string): Rgb {
     const n = parseInt(hex.slice(1), 16);
     return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff };
@@ -87,6 +98,21 @@
         ? { r: Math.round(base.r * f), g: Math.round(base.g * f), b: Math.round(base.b * f) }
         : base;
     await call("set_rgb", { mode: effectMode, color, intensity });
+  }
+
+  // Debounce live-apply for the lighting controls so the slider feels immediate
+  // without flooding the HID channel.
+  let lightTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleLed() {
+    if (lightTimer) clearTimeout(lightTimer);
+    lightTimer = setTimeout(applyLed, 80);
+  }
+
+  function applyPreset(name: keyof typeof EQ_PRESETS) {
+    const p = EQ_PRESETS[name];
+    eqGains = [...p.gains];
+    preamp = p.preamp;
+    eqPreset = name;
   }
 
   async function applyEq() {
@@ -133,7 +159,52 @@
     eqBackend = (await call<string | null>("audio_backend_status")) ?? null;
   }
 
-  $effect(() => { refresh(); });
+  // Autostart toggle wired straight to the tauri-plugin-autostart commands.
+  let autostart = $state(false);
+  async function refreshAutostart() {
+    autostart = (await call<boolean>("plugin:autostart|is_enabled")) ?? false;
+  }
+  async function toggleAutostart() {
+    autostart = !autostart;
+    await call(autostart ? "plugin:autostart|enable" : "plugin:autostart|disable");
+    await refreshAutostart();
+  }
+
+  // Persistence — every UI choice is mirrored to localStorage on change and
+  // restored on app load so the panel doesn't reset every launch.
+  // Device-side state (LED color, NR, latency…) is already preserved in
+  // headset firmware; this just restores the UI's mirror of it.
+  const SETTINGS_KEY = "openpelta:settings:v1";
+  let restored = false;
+  function loadSettings() {
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      if (!raw) { restored = true; return; }
+      const s = JSON.parse(raw);
+      if (typeof s.colorHex === "string") colorHex = s.colorHex;
+      if (s.effectMode) effectMode = s.effectMode;
+      if (typeof s.intensity === "number") intensity = s.intensity;
+      if (Array.isArray(s.eqGains) && s.eqGains.length === 10) eqGains = s.eqGains;
+      if (typeof s.preamp === "number") preamp = s.preamp;
+      if (typeof s.eqPreset === "string") eqPreset = s.eqPreset;
+      if (typeof s.tab === "string") tab = s.tab;
+    } catch { /* corrupt entry → ignore */ }
+    restored = true;
+  }
+  function saveSettings() {
+    if (!restored) return; // don't overwrite before we've read the old value
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      colorHex, effectMode, intensity, eqGains, preamp, eqPreset, tab,
+    }));
+  }
+
+  $effect(() => { loadSettings(); refresh(); refreshAutostart(); });
+  // Auto-save on any tracked change.
+  $effect(() => {
+    saveSettings();
+    // Touch the deps so Svelte re-runs this effect when they change.
+    void [colorHex, effectMode, intensity, eqGains, preamp, eqPreset, tab];
+  });
   // Re-detect the audio backend every time the user enters the EQ tab so a
   // freshly-installed APO is picked up without needing a manual refresh.
   $effect(() => {
@@ -169,7 +240,7 @@
     {#if tab === "lighting"}
       <section class="panel">
         <div class="swatch" style:--c={colorHex}>
-          <input type="color" bind:value={colorHex} aria-label="LED color" />
+          <input type="color" bind:value={colorHex} oninput={scheduleLed} aria-label="LED color" />
           <div class="swatch-meta">
             <span class="mono lg">{colorHex.toUpperCase()}</span>
             <span class="cap">LED color</span>
@@ -180,32 +251,37 @@
           <span class="cap">Effect</span>
           <div class="seg">
             {#each EFFECTS as e}
-              <button class:active={effectMode === e.id} onclick={() => (effectMode = e.id)}>{e.label}</button>
+              <button class:active={effectMode === e.id} onclick={() => { effectMode = e.id; scheduleLed(); }}>{e.label}</button>
             {/each}
           </div>
         </div>
 
         <div class="field">
           <span class="cap">Intensity <em class="mono">{intensity}</em></span>
-          <input class="slider" type="range" min="0" max="100" bind:value={intensity} />
+          <input class="slider" type="range" min="0" max="100" bind:value={intensity} oninput={scheduleLed} />
         </div>
-
-        <button class="apply" onclick={applyLed}>Apply lighting</button>
       </section>
     {/if}
 
     {#if tab === "audio"}
       <section class="panel">
-        <button class="toggle" class:on={noiseReduction} onclick={toggleNr}>
-          <span class="knob"></span>
-          <span class="t-label">Mic noise reduction</span>
-          <span class="mono state">{noiseReduction ? "ON" : "OFF"}</span>
-        </button>
-        <button class="toggle" class:on={demoMode} onclick={toggleDemo}>
-          <span class="knob"></span>
-          <span class="t-label">Demo mode</span>
-          <span class="mono state">{demoMode ? "ON" : "OFF"}</span>
-        </button>
+        <div class="explain">
+          <button class="toggle" class:on={noiseReduction} onclick={toggleNr}>
+            <span class="knob"></span>
+            <span class="t-label">Mic noise reduction</span>
+            <span class="mono state">{noiseReduction ? "ON" : "OFF"}</span>
+          </button>
+          <small class="hint">Firmware-side filter that suppresses background noise on the microphone. The effect is only audible to listeners on the other end — test by recording yourself with NR off then on.</small>
+        </div>
+
+        <div class="explain">
+          <button class="toggle" class:on={demoMode} onclick={toggleDemo}>
+            <span class="knob"></span>
+            <span class="t-label">Demo mode</span>
+            <span class="mono state">{demoMode ? "ON" : "OFF"}</span>
+          </button>
+          <small class="hint">Cycles the headset LED through every effect on a loop — the showroom/demo behavior ASUS uses to show off the lighting. Leave OFF for normal use.</small>
+        </div>
 
         <div class="field">
           <span class="cap">Wireless latency</span>
@@ -244,8 +320,17 @@
         {/if}
 
         <div class="field">
+          <span class="cap">Preset</span>
+          <div class="seg">
+            {#each Object.keys(EQ_PRESETS) as name}
+              <button class:active={eqPreset === name} onclick={() => applyPreset(name as keyof typeof EQ_PRESETS)}>{name}</button>
+            {/each}
+          </div>
+        </div>
+
+        <div class="field">
           <span class="cap">Preamp <em class="mono">{preamp > 0 ? "+" : ""}{preamp} dB</em></span>
-          <input class="slider" type="range" min="-12" max="12" step="0.5" bind:value={preamp} />
+          <input class="slider" type="range" min="-12" max="12" step="0.5" bind:value={preamp} oninput={() => (eqPreset = "Custom")} />
         </div>
         <div class="eq">
           {#each EQ_FREQS as f, i}
@@ -254,6 +339,7 @@
                 class="vrange"
                 type="range" min="-12" max="12" step="0.5"
                 bind:value={eqGains[i]}
+                oninput={() => (eqPreset = "Custom")}
               />
               <span class="eq-gain mono">{eqGains[i] > 0 ? "+" : ""}{eqGains[i]}</span>
               <span class="eq-freq mono">{f >= 1000 ? f / 1000 + "k" : f}</span>
@@ -301,6 +387,14 @@
           <dt>Firmware</dt><dd>{firmware}</dd>
           <dt>Driver</dt><dd>OpenPelta 0.1</dd>
         </dl>
+
+        <button class="toggle" class:on={autostart} onclick={toggleAutostart}>
+          <span class="knob"></span>
+          <span class="t-label">Launch on system startup</span>
+          <span class="mono state">{autostart ? "ON" : "OFF"}</span>
+        </button>
+        <small class="hint">When on, OpenPelta starts hidden in the system tray every time you log in. Closing the window also sends it to the tray instead of quitting — use the tray menu to fully exit.</small>
+
         <p class="note">Open-source replacement for ASUS Armoury Crate Gear.
           Protocol reverse-engineered from scratch — see the project repo.</p>
         <p class="note warn">⚠ Firmware updates are intentionally not supported
@@ -507,6 +601,9 @@
   }
   .backend-missing p { margin: 0; font-size: 0.85rem; color: var(--text); }
   .backend-missing .apply { margin: 0; }
+
+  .explain { display: flex; flex-direction: column; gap: 0.35rem; }
+  .explain .hint { padding: 0 0.2rem; line-height: 1.5; }
 
   /* battery */
   .battery { display: flex; flex-direction: column; gap: 0.5rem; }
