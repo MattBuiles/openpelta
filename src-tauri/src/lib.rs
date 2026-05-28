@@ -373,6 +373,17 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // Global hotkeys: Ctrl+Alt+M (mic mute) and Ctrl+Alt+1..9
+            // (switch to saved profile slot N). The manager isn't Send+Sync
+            // (platform handles, interior mutability), so instead of stashing
+            // it in app state we leak it — its only job is staying alive for
+            // the lifetime of the program so the registrations don't drop.
+            match hotkeys::install(&app.handle()) {
+                Ok(h) => { Box::leak(Box::new(h)); }
+                Err(e) => tracing::warn!("Could not register global hotkeys: {e}"),
+            }
+
             Ok(())
         })
         // Hide to tray instead of quitting when the window is closed.

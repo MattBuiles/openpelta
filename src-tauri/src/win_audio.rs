@@ -9,7 +9,6 @@
 #![cfg(target_os = "windows")]
 
 use anyhow::{anyhow, Result};
-use windows::core::Interface;
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{
     eCapture, eCommunications, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,

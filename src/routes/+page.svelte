@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
   type Rgb = { r: number; g: number; b: number };
   type PowerInfo = { percent: number; charging: boolean; raw: number[] };
@@ -321,7 +322,14 @@
       Notification.requestPermission();
     }
     const interval = setInterval(pollBattery, 5 * 60 * 1000);
-    return () => clearInterval(interval);
+    const unsubs: UnlistenFn[] = [];
+    listen<boolean>("hotkey:mic-mute", (e) => { micMuted = e.payload; })
+      .then((u) => unsubs.push(u));
+    listen<number>("hotkey:profile", (e) => {
+      const p = profiles[e.payload];
+      if (p) applyProfileByName(p.name);
+    }).then((u) => unsubs.push(u));
+    return () => { clearInterval(interval); unsubs.forEach((u) => u()); };
   });
   // Auto-save on any tracked change.
   $effect(() => {
