@@ -23,7 +23,7 @@ the order we plan to tackle them.
 | 2.2 | **Global hotkeys wired** | ✅ Done — Ctrl+Alt+M (mic mute) handled in backend; Ctrl+Alt+1..9 emit `hotkey:profile` events the frontend applies |
 | 2.3 | **Per-app auto-profile switching** | ✅ Done — Windows foreground-window watcher emits `foreground:changed`; each profile carries an `app_matches` list, frontend auto-applies the first matching profile on focus change |
 | 2.4 | **OpenPelta auto-update** | ⏳ Not started — needs release signing + hosted `latest.json` |
-| 2.5 | **Battery % calibration** | ⏳ Needs a charge / discharge cycle from the user to confirm byte mapping |
+| 2.5 | **Battery % calibration** | ✅ Done — multi-day live use confirms `payload[5]` of getPowerInfo tracks battery percentage as expected (decreases steadily, jumps up when charging) |
 | 2.6 | **Light-effect mode labels** | ✅ Done — confirmed visually (2026-05-28): mode 1 = static, 2 = breathing, 3 = strobe, 4 = rainbow. RgbMode + dispatch + UI updated |
 | 2.7 | **Probe `setSWModeOnOff`** | 🟡 Wire format pinned: send `[0x51, 0x33, 0x00, 0x00, <on>]` as Output report `0x3A` on the RF collection (0xFF07, wireless). Device accepts both values without error; user-visible semantic still TBD (does not appear to be required for the direct-color path we already use). |
 
