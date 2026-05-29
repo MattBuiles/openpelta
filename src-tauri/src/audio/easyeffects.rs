@@ -23,6 +23,10 @@ fn dirs_path() -> Option<PathBuf> {
 }
 
 impl AudioBackend for EasyEffects {
+    fn name(&self) -> &'static str {
+        "EasyEffects"
+    }
+
     fn apply(&self, cfg: &AudioConfig) -> Result<()> {
         fs::create_dir_all(&self.preset_dir)?;
         let path = self.preset_dir.join("openpelta.json");

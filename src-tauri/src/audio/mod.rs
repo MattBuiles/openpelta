@@ -16,9 +16,14 @@ pub struct AudioConfig {
     pub bands: Vec<EqBand>,
     pub preamp_db: f32,
     pub surround_enabled: bool,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
-pub trait AudioBackend {
+fn default_true() -> bool { true }
+
+pub trait AudioBackend: Send + Sync {
+    fn name(&self) -> &'static str;
     fn apply(&self, cfg: &AudioConfig) -> Result<()>;
     fn is_installed(&self) -> bool;
 }
