@@ -591,7 +591,10 @@
               <span class="t-label">Virtual surround 7.1</span>
               <span class="mono state">{surroundEnabled ? "ON" : "OFF"}</span>
             </button>
-            <small class="hint">Routed through <span class="mono">{surroundBackend}</span>. Pick which HRIR preset is active from the HeSuVi app in your Start menu.</small>
+            <div class="row-btns">
+              <button class="ghost" onclick={() => call("open_surround_gui")}>Open HeSuVi</button>
+            </div>
+            <small class="hint">Convolution routed through <span class="mono">{surroundBackend}</span>. The first time, open HeSuVi and click <em>Apply</em> on a preset (e.g. <span class="mono">Dolby Headphone</span>) so its <span class="mono">hesuvi.txt</span> exists — after that this toggle just chains it into APO.</small>
           {:else}
             <div class="backend-missing">
               <p>Virtual surround needs HeSuVi (provides the HRIR files for APO).</p>

@@ -241,12 +241,28 @@ fn install_eq_backend() -> Result<String, String> {
 }
 
 /// Surround 7.1 backend = HeSuVi, which ships HRIR files for APO and a GUI
-/// to pick which one to use. Detection looks for the canonical config file
-/// it drops next to APO's own `config.txt`.
+/// to pick which one to use. Detection: HeSuVi installs into a subfolder of
+/// APO's config dir and drops HeSuVi.exe there, which we can also launch.
 #[tauri::command]
 fn surround_backend_status() -> Option<String> {
-    let p = std::path::Path::new(r"C:\Program Files\EqualizerAPO\config\hesuvi-7.1.txt");
-    if p.exists() { Some("HeSuVi".into()) } else { None }
+    if hesuvi_exe().exists() { Some("HeSuVi".into()) } else { None }
+}
+
+fn hesuvi_exe() -> std::path::PathBuf {
+    std::path::PathBuf::from(r"C:\Program Files\EqualizerAPO\config\HeSuVi\HeSuVi.exe")
+}
+
+/// Launch HeSuVi's GUI so the user can pick / change the HRIR preset.
+#[tauri::command]
+fn open_surround_gui() -> Result<(), String> {
+    let exe = hesuvi_exe();
+    if !exe.exists() {
+        return Err("HeSuVi is not installed".into());
+    }
+    std::process::Command::new(&exe)
+        .spawn()
+        .map_err(|e| format!("Could not launch HeSuVi: {e}"))?;
+    Ok(())
 }
 
 /// Download + launch the HeSuVi installer. HeSuVi requires APO already
@@ -451,6 +467,7 @@ pub fn run() {
             install_eq_backend,
             surround_backend_status,
             install_surround_backend,
+            open_surround_gui,
             set_eq,
             list_profiles,
             save_profiles,

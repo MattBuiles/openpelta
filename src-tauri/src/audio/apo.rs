@@ -57,7 +57,10 @@ impl EqualizerApo {
             ));
         }
         if cfg.surround_enabled {
-            out.push_str("Include: hesuvi-7.1.txt\n");
+            // HeSuVi keeps its master config under its install subfolder; the
+            // user picks the HRIR preset there and we just wire it into the
+            // chain after our EQ filters.
+            out.push_str("Include: HeSuVi\\hesuvi.txt\n");
         }
         out
     }
