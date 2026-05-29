@@ -21,11 +21,11 @@ the order we plan to tackle them.
 |---|---|---|
 | 2.1 | **Sidetone level setter (UAC)** | ⏳ Not started — needs IKsControl / IDeviceTopology spike |
 | 2.2 | **Global hotkeys wired** | ✅ Done — Ctrl+Alt+M (mic mute) handled in backend; Ctrl+Alt+1..9 emit `hotkey:profile` events the frontend applies |
-| 2.3 | **Per-app auto-profile switching** | ⏳ Not started — needs a foreground-window watcher loop |
+| 2.3 | **Per-app auto-profile switching** | ✅ Done — Windows foreground-window watcher emits `foreground:changed`; each profile carries an `app_matches` list, frontend auto-applies the first matching profile on focus change |
 | 2.4 | **OpenPelta auto-update** | ⏳ Not started — needs release signing + hosted `latest.json` |
 | 2.5 | **Battery % calibration** | ⏳ Needs a charge / discharge cycle from the user to confirm byte mapping |
 | 2.6 | **Light-effect mode labels** | ⏳ Needs the user's eyes on the LED to map modes 1..4 to real names |
-| 2.7 | **Probe `setSWModeOnOff`** | ⏳ Worth one focused replay session targeting the RF state collection (0xFF07) |
+| 2.7 | **Probe `setSWModeOnOff`** | 🟡 Wire format pinned: send `[0x51, 0x33, 0x00, 0x00, <on>]` as Output report `0x3A` on the RF collection (0xFF07, wireless). Device accepts both values without error; user-visible semantic still TBD (does not appear to be required for the direct-color path we already use). |
 
 ## Out of scope (intentional)
 

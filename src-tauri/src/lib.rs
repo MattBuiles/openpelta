@@ -7,6 +7,8 @@ pub mod rgb;
 pub mod tray;
 #[cfg(target_os = "windows")]
 pub mod win_audio;
+#[cfg(target_os = "windows")]
+pub mod foreground;
 
 use std::sync::Mutex;
 
@@ -383,6 +385,10 @@ pub fn run() {
                 Ok(h) => { Box::leak(Box::new(h)); }
                 Err(e) => tracing::warn!("Could not register global hotkeys: {e}"),
             }
+
+            // Foreground-window watcher for per-app auto-profile switching.
+            #[cfg(target_os = "windows")]
+            foreground::install(&app.handle());
 
             Ok(())
         })

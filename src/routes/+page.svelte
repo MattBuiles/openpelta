@@ -15,6 +15,7 @@
     eq: EqConfig;
     nr: boolean;
     latency_ms: number;
+    app_matches?: string[];
   };
 
   let tab = $state<Tab>("lighting");
@@ -196,7 +197,7 @@
   function rgbToHex(c: Rgb): string {
     return "#" + [c.r, c.g, c.b].map((b) => b.toString(16).padStart(2, "0")).join("");
   }
-  function snapshotProfile(name: string): Profile {
+  function snapshotProfile(name: string, prev?: Profile): Profile {
     return {
       name,
       rgb: { mode: effectMode, color: currentRgb(), speed: intensity },
@@ -208,6 +209,8 @@
       },
       nr: noiseReduction,
       latency_ms: latency,
+      // Preserve app_matches across overwrites — they're configured separately.
+      app_matches: prev?.app_matches ?? [],
     };
   }
   async function loadProfiles() {
@@ -252,8 +255,27 @@
   }
   async function overwriteActive() {
     if (!activeProfile) return;
-    profiles = profiles.map((p) => (p.name === activeProfile ? snapshotProfile(activeProfile) : p));
+    const prev = profiles.find((p) => p.name === activeProfile);
+    profiles = profiles.map((p) => (p.name === activeProfile ? snapshotProfile(activeProfile, prev) : p));
     await saveProfilesPersist(activeProfile);
+  }
+  async function setActiveAppMatches(list: string[]) {
+    if (!activeProfile) return;
+    profiles = profiles.map((p) =>
+      p.name === activeProfile ? { ...p, app_matches: list } : p
+    );
+    await saveProfilesPersist(activeProfile);
+  }
+  function activeProfileObj(): Profile | undefined {
+    return profiles.find((p) => p.name === activeProfile);
+  }
+  async function onForegroundChanged(proc: string) {
+    const target = profiles.find((p) =>
+      (p.app_matches ?? []).some((m) => m && proc.includes(m.toLowerCase()))
+    );
+    if (target && target.name !== activeProfile) {
+      await applyProfileByName(target.name);
+    }
   }
   async function refreshAutostart() {
     autostart = (await call<boolean>("plugin:autostart|is_enabled")) ?? false;
@@ -329,6 +351,8 @@
       const p = profiles[e.payload];
       if (p) applyProfileByName(p.name);
     }).then((u) => unsubs.push(u));
+    listen<string>("foreground:changed", (e) => { onForegroundChanged(e.payload); })
+      .then((u) => unsubs.push(u));
     return () => { clearInterval(interval); unsubs.forEach((u) => u()); };
   });
   // Auto-save on any tracked change.
@@ -392,6 +416,24 @@
       {/if}
     {/if}
   </div>
+
+  {#if activeProfile && !renaming}
+    <div class="app-matches">
+      <span class="cap">Auto-apply when</span>
+      <input
+        class="prof-input mono"
+        placeholder="lol.exe, spotify.exe (comma-separated)"
+        value={(activeProfileObj()?.app_matches ?? []).join(", ")}
+        onblur={(e) =>
+          setActiveAppMatches(
+            (e.currentTarget as HTMLInputElement).value
+              .split(",")
+              .map((s) => s.trim().toLowerCase())
+              .filter(Boolean)
+          )}
+      />
+    </div>
+  {/if}
 
   <nav class="tabs">
     {#each ["lighting", "audio", "eq", "power", "about"] as t}
@@ -799,6 +841,14 @@
   .prof-select:focus, .prof-input:focus { outline: none; border-color: #4a5562; }
   .ghost.sm { padding: 0.35rem 0.6rem; font-size: 0.7rem; letter-spacing: 0.08em; }
   .ghost.danger:hover { color: #ff7a8b; border-color: #5a2230; }
+
+  .app-matches {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.45rem 1.1rem;
+    border-bottom: 1px solid var(--line);
+    background: #0c0c0f;
+  }
+  .app-matches .cap { white-space: nowrap; }
 
   /* battery */
   .battery { display: flex; flex-direction: column; gap: 0.5rem; }
