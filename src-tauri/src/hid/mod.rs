@@ -21,15 +21,14 @@ impl Rgb {
 ///
 /// `Static` is driven through the dedicated direct-color command
 /// (`setSWLEDColor`). The animated modes go through `setLightEffect`, whose
-/// device-side mode bytes were validated as 1..4. The exact mapping of each
-/// byte to a named effect still needs UI-level confirmation against the
-/// hardware, so the byte assignments in `set_rgb` are provisional.
+/// device-side mode bytes were confirmed visually (cyan probe, 2026-05-28):
+///   1 = static, 2 = breathing, 3 = strobe, 4 = rainbow.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum RgbMode {
     Off,
     Static,
     Breathing,
-    Wave,
+    Strobe,
     Rainbow,
 }
 
@@ -82,14 +81,16 @@ pub trait PeltaDevice: Send + Sync {
     fn set_latency_mode(&self, value_ms: u8) -> Result<()>;
     fn set_demo_mode(&self, on: bool) -> Result<()>;
 
-    /// High-level RGB dispatch used by the profile system.
+    /// High-level RGB dispatch used by the profile system. Mode-byte mapping
+    /// matches what the device firmware actually does (live-confirmed):
+    /// breathing=2, strobe=3, rainbow=4.
     fn set_rgb(&self, mode: RgbMode, color: Rgb, intensity: u8) -> Result<()> {
         match mode {
             RgbMode::Off => self.set_led_color(Rgb::OFF),
             RgbMode::Static => self.set_led_color(color),
-            RgbMode::Breathing => self.set_light_effect(1, intensity, color),
-            RgbMode::Wave => self.set_light_effect(2, intensity, color),
-            RgbMode::Rainbow => self.set_light_effect(3, intensity, color),
+            RgbMode::Breathing => self.set_light_effect(2, intensity, color),
+            RgbMode::Strobe => self.set_light_effect(3, intensity, color),
+            RgbMode::Rainbow => self.set_light_effect(4, intensity, color),
         }
     }
 }

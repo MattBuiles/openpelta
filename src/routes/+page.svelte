@@ -32,7 +32,7 @@
 
   // lighting
   let colorHex = $state("#ff2d55");
-  let effectMode = $state<"Off" | "Static" | "Breathing" | "Wave" | "Rainbow">("Static");
+  let effectMode = $state<"Off" | "Static" | "Breathing" | "Strobe" | "Rainbow">("Static");
   let intensity = $state(50);
 
   // audio / link
@@ -55,7 +55,7 @@
     { id: "Off", label: "Off" },
     { id: "Static", label: "Static" },
     { id: "Breathing", label: "Breathing" },
-    { id: "Wave", label: "Wave" },
+    { id: "Strobe", label: "Strobe" },
     { id: "Rainbow", label: "Rainbow" },
   ];
 
@@ -318,7 +318,9 @@
       if (!raw) { restored = true; return; }
       const s = JSON.parse(raw);
       if (typeof s.colorHex === "string") colorHex = s.colorHex;
-      if (s.effectMode) effectMode = s.effectMode;
+      // Migrate the old "Wave" name from earlier builds to its real label "Strobe".
+      if (s.effectMode === "Wave") effectMode = "Strobe";
+      else if (s.effectMode) effectMode = s.effectMode;
       if (typeof s.intensity === "number") intensity = s.intensity;
       if (Array.isArray(s.eqGains) && s.eqGains.length === 10) eqGains = s.eqGains;
       if (typeof s.preamp === "number") preamp = s.preamp;
