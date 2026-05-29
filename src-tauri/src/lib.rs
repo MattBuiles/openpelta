@@ -151,89 +151,119 @@ fn audio_backend_status() -> Option<String> {
     audio::detect().map(|b| b.name().to_string())
 }
 
-/// Download and launch the installer for the host audio EQ backend.
+/// Fetch a SourceForge installer past their JS interstitial, verify it, and
+/// run it elevated. Returns the success message for the frontend.
 ///
-/// Equalizer APO is hosted only on SourceForge, which now serves a JS
-/// interstitial instead of the binary on its `/download` URLs. The browser
-/// follows a `<meta refresh>` tag containing a one-time signed mirror URL —
-/// we replicate that here by fetching the interstitial page first, parsing
-/// the meta-refresh URL out of the HTML, and then downloading the real
-/// binary from it. The installer itself is a GUI wizard so the user still
-/// picks the audio device and reboots, but the download + launch step is
-/// fully automated.
+/// SourceForge no longer serves binaries directly from `/projects/<slug>/
+/// files/latest/download` — they return a JS page that follows a
+/// `<meta http-equiv="refresh">` tag carrying a one-time signed mirror URL.
+/// We replicate that flow here so the user just clicks "install" and the
+/// elevated wizard pops without manual download steps.
+#[cfg(target_os = "windows")]
+fn sf_download_and_run(
+    project_slug: &str,
+    installer_basename: &str,
+    success_message: &str,
+) -> Result<String, String> {
+    let page_url =
+        format!("https://sourceforge.net/projects/{project_slug}/files/latest/download");
+
+    let html_out = std::process::Command::new("curl")
+        .args(["-sL", "-A", "Mozilla/5.0 (OpenPelta)", &page_url])
+        .output()
+        .map_err(|e| format!("curl failed to start: {e}"))?;
+    if !html_out.status.success() {
+        return Err("Could not reach SourceForge to fetch the installer page.".into());
+    }
+    let html = String::from_utf8_lossy(&html_out.stdout);
+
+    let mirror_url = {
+        let after = html
+            .split(r#"meta http-equiv="refresh""#)
+            .nth(1)
+            .ok_or("SourceForge page format changed (no meta refresh)")?;
+        let url_start = after.find("url=").ok_or("No url= in meta refresh")? + 4;
+        let rest = &after[url_start..];
+        let end = rest.find('"').ok_or("Malformed meta-refresh URL")?;
+        rest[..end].replace("&amp;", "&")
+    };
+
+    let installer = std::env::temp_dir().join(installer_basename);
+    let installer_str = installer.to_string_lossy().to_string();
+    let dl = std::process::Command::new("curl")
+        .args([
+            "-sLfo", &installer_str,
+            "-A", "Mozilla/5.0 (OpenPelta)",
+            &mirror_url,
+        ])
+        .status()
+        .map_err(|e| format!("curl download failed: {e}"))?;
+    if !dl.success() {
+        return Err("Installer download failed — try again in a moment.".into());
+    }
+
+    let head = std::fs::read(&installer).unwrap_or_default();
+    if head.len() < 2 || &head[..2] != b"MZ" {
+        return Err(
+            "Downloaded file is not an executable; SourceForge may have changed its page format."
+                .into(),
+        );
+    }
+
+    // Elevated launch — many installers refuse to run otherwise. PowerShell's
+    // `Start-Process -Verb RunAs` pops the UAC prompt the user expects.
+    std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-WindowStyle", "Hidden",
+            "-Command",
+            &format!("Start-Process -FilePath '{}' -Verb RunAs", installer_str),
+        ])
+        .spawn()
+        .map_err(|e| format!("Could not launch installer: {e}"))?;
+
+    Ok(success_message.into())
+}
+
+/// Download + launch the Equalizer APO installer.
 #[tauri::command]
 fn install_eq_backend() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        let page_url = "https://sourceforge.net/projects/equalizerapo/files/latest/download";
-
-        // Step 1: pull the interstitial HTML.
-        let html_out = std::process::Command::new("curl")
-            .args(["-sL", "-A", "Mozilla/5.0 (OpenPelta)", page_url])
-            .output()
-            .map_err(|e| format!("curl failed to start: {e}"))?;
-        if !html_out.status.success() {
-            return Err("Could not reach SourceForge to fetch the installer page.".into());
-        }
-        let html = String::from_utf8_lossy(&html_out.stdout);
-
-        // Step 2: dig the signed mirror URL out of `<meta http-equiv="refresh" ...>`.
-        let mirror_url = {
-            let after = html
-                .split(r#"meta http-equiv="refresh""#)
-                .nth(1)
-                .ok_or("SourceForge page format changed (no meta refresh)")?;
-            let url_start = after.find("url=").ok_or("No url= in meta refresh")? + 4;
-            let rest = &after[url_start..];
-            let end = rest
-                .find('"')
-                .ok_or("Malformed meta-refresh URL")?;
-            rest[..end].replace("&amp;", "&")
-        };
-
-        // Step 3: download the actual installer.
-        let installer = std::env::temp_dir().join("EqualizerAPO-installer.exe");
-        let installer_str = installer.to_string_lossy().to_string();
-        let dl = std::process::Command::new("curl")
-            .args([
-                "-sLfo", &installer_str,
-                "-A", "Mozilla/5.0 (OpenPelta)",
-                &mirror_url,
-            ])
-            .status()
-            .map_err(|e| format!("curl download failed: {e}"))?;
-        if !dl.success() {
-            return Err("Installer download failed — try again in a moment.".into());
-        }
-
-        // Sanity check: must be a real PE/EXE (starts with `MZ`).
-        let head = std::fs::read(&installer).unwrap_or_default();
-        if head.len() < 2 || &head[..2] != b"MZ" {
-            return Err(
-                "Downloaded file is not an executable; SourceForge may have changed its page format.".into(),
-            );
-        }
-
-        // Step 4: launch the wizard. APO's installer needs elevation; spawning
-        // it directly fails with "requires elevation" (Win32 error 740). Going
-        // through PowerShell's `Start-Process -Verb RunAs` pops the standard
-        // UAC dialog for the user instead.
-        std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-WindowStyle", "Hidden",
-                "-Command",
-                &format!("Start-Process -FilePath '{}' -Verb RunAs", installer_str),
-            ])
-            .spawn()
-            .map_err(|e| format!("Could not launch installer: {e}"))?;
-
-        Ok("Installer launched — accept the UAC prompt, then walk the wizard (pick the Pelta audio device) and reboot.".into())
+        sf_download_and_run(
+            "equalizerapo",
+            "EqualizerAPO-installer.exe",
+            "Installer launched — accept the UAC prompt, then walk the wizard (pick the Pelta audio device) and reboot.",
+        )
     }
     #[cfg(not(target_os = "windows"))]
+    { Err("Auto-install is currently Windows-only".into()) }
+}
+
+/// Surround 7.1 backend = HeSuVi, which ships HRIR files for APO and a GUI
+/// to pick which one to use. Detection looks for the canonical config file
+/// it drops next to APO's own `config.txt`.
+#[tauri::command]
+fn surround_backend_status() -> Option<String> {
+    let p = std::path::Path::new(r"C:\Program Files\EqualizerAPO\config\hesuvi-7.1.txt");
+    if p.exists() { Some("HeSuVi".into()) } else { None }
+}
+
+/// Download + launch the HeSuVi installer. HeSuVi requires APO already
+/// installed (it writes files into APO's config dir); we don't enforce that
+/// here because the installer itself complains clearly if APO is missing.
+#[tauri::command]
+fn install_surround_backend() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
     {
-        Err("Auto-install is currently Windows-only".into())
+        sf_download_and_run(
+            "hesuvi",
+            "HeSuVi-installer.exe",
+            "HeSuVi installer launched. Accept the UAC prompt, then open HeSuVi from the Start menu to pick which virtual surround preset you want active.",
+        )
     }
+    #[cfg(not(target_os = "windows"))]
+    { Err("Auto-install is currently Windows-only".into()) }
 }
 
 /// Mic mute is a USB Audio Class control, not a vendor command — handled
@@ -419,6 +449,8 @@ pub fn run() {
             set_mic_mute,
             audio_backend_status,
             install_eq_backend,
+            surround_backend_status,
+            install_surround_backend,
             set_eq,
             list_profiles,
             save_profiles,

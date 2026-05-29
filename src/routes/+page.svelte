@@ -49,6 +49,9 @@
   let eqEnabled = $state(true);
   let eqBackend = $state<string | null>(null);
   let installing = $state(false);
+  let surroundEnabled = $state(false);
+  let surroundBackend = $state<string | null>(null);
+  let installingSurround = $state(false);
 
   const LATENCY_PRESETS = [40, 60, 80, 100];
   const EFFECTS: { id: typeof effectMode; label: string }[] = [
@@ -136,7 +139,7 @@
     const config = {
       bands: EQ_FREQS.map((f, i) => ({ freq_hz: f, gain_db: eqGains[i], q: 1.0 })),
       preamp_db: preamp,
-      surround_enabled: false,
+      surround_enabled: surroundEnabled && !!surroundBackend,
       enabled: eqEnabled,
     };
     const ok = await call("set_eq", { config });
@@ -182,6 +185,18 @@
 
   async function checkBackend() {
     eqBackend = (await call<string | null>("audio_backend_status")) ?? null;
+    surroundBackend = (await call<string | null>("surround_backend_status")) ?? null;
+  }
+  async function installSurround() {
+    installingSurround = true;
+    const msg = await call<string>("install_surround_backend");
+    eqStatus = msg ?? "";
+    installingSurround = false;
+    setTimeout(checkBackend, 4000);
+  }
+  async function toggleSurround() {
+    surroundEnabled = !surroundEnabled;
+    if (eqBackend) await applyEq();
   }
 
   // Autostart toggle wired straight to the tauri-plugin-autostart commands.
@@ -326,6 +341,7 @@
       if (typeof s.preamp === "number") preamp = s.preamp;
       if (typeof s.eqPreset === "string") eqPreset = s.eqPreset;
       if (typeof s.eqEnabled === "boolean") eqEnabled = s.eqEnabled;
+      if (typeof s.surroundEnabled === "boolean") surroundEnabled = s.surroundEnabled;
       if (typeof s.tab === "string") tab = s.tab;
     } catch { /* corrupt entry → ignore */ }
     restored = true;
@@ -333,7 +349,7 @@
   function saveSettings() {
     if (!restored) return; // don't overwrite before we've read the old value
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      colorHex, effectMode, intensity, eqGains, preamp, eqPreset, eqEnabled, tab,
+      colorHex, effectMode, intensity, eqGains, preamp, eqPreset, eqEnabled, surroundEnabled, tab,
     }));
   }
 
@@ -361,7 +377,7 @@
   $effect(() => {
     saveSettings();
     // Touch the deps so Svelte re-runs this effect when they change.
-    void [colorHex, effectMode, intensity, eqGains, preamp, eqPreset, eqEnabled, tab];
+    void [colorHex, effectMode, intensity, eqGains, preamp, eqPreset, eqEnabled, surroundEnabled, tab];
   });
   // Re-detect the audio backend every time the user enters the EQ tab so a
   // freshly-installed APO is picked up without needing a manual refresh.
@@ -567,6 +583,28 @@
           <span class="t-label">EQ active</span>
           <span class="mono state">{eqEnabled ? "ON" : "BYPASS"}</span>
         </button>
+
+        {#if eqBackend}
+          {#if surroundBackend}
+            <button class="toggle" class:on={surroundEnabled} onclick={toggleSurround}>
+              <span class="knob"></span>
+              <span class="t-label">Virtual surround 7.1</span>
+              <span class="mono state">{surroundEnabled ? "ON" : "OFF"}</span>
+            </button>
+            <small class="hint">Routed through <span class="mono">{surroundBackend}</span>. Pick which HRIR preset is active from the HeSuVi app in your Start menu.</small>
+          {:else}
+            <div class="backend-missing">
+              <p>Virtual surround needs HeSuVi (provides the HRIR files for APO).</p>
+              <div class="row-btns">
+                <button class="ghost" onclick={checkBackend}>Check again</button>
+                <button class="apply" onclick={installSurround} disabled={installingSurround}>
+                  {installingSurround ? "launching installer…" : "Install HeSuVi"}
+                </button>
+              </div>
+              <small class="hint">Free SourceForge installer (~27 MB). After install, open HeSuVi once to pick a preset — this app will detect it automatically when you come back to the EQ tab.</small>
+            </div>
+          {/if}
+        {/if}
 
         <div class="row-btns">
           <button class="ghost" onclick={resetEq}>Reset</button>

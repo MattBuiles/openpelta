@@ -10,7 +10,7 @@ the order we plan to tackle them.
 |---|---|---|
 | 1.1 | **Mic mute (software)** | ✅ Done — Windows Core Audio in `win_audio.rs`, exposed in UI + tray + hotkey |
 | 1.2 | **EQ on/off toggle** | ✅ Done — `AudioConfig.enabled` + APO renders no-op when off |
-| 1.3 | **Surround sound 7.1 (HeSuVi)** | ⏳ Not started — needs bundled / downloaded HRIR for APO |
+| 1.3 | **Surround sound 7.1 (HeSuVi)** | ✅ Done — auto-install of HeSuVi from SourceForge (same SF interstitial trick, factored into a shared `sf_download_and_run` helper). HRIR data is owned by HeSuVi so no licensing footprint on our repo. Toggle + install banner in the EQ tab; APO's `Include: hesuvi-7.1.txt` flows through `surround_enabled` |
 | 1.4 | **Multiple profiles** | ✅ Done — picker bar with save / overwrite / delete, apply pushes everything |
 | 1.5 | **Tray quick-toggles** | ✅ Done — Show / mic mute / NR / Quit |
 | 1.6 | **Low-battery notification** | ✅ Done — 5-min poll, Notification API, hysteresis on recovery |
