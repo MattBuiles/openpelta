@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "openpelta",
-  "version": "0.1.0",
+  "productName": "OpenPelta",
+  "version": "0.2.0",
   "identifier": "com.openpelta.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -12,9 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "openpelta",
-        "width": 800,
-        "height": 600
+        "title": "OpenPelta",
+        "width": 480,
+        "height": 780,
+        "minWidth": 420,
+        "minHeight": 600,
+        "resizable": true
       }
     ],
     "security": {
@@ -23,7 +26,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["msi", "nsis"],
+    "publisher": "OpenPelta",
+    "category": "Utility",
+    "shortDescription": "Open-source control panel for the ASUS ROG Pelta headset",
+    "longDescription": "OpenPelta is an open-source replacement for ASUS Armoury Crate Gear, controlling the ROG Pelta headset over its vendor HID channel. Lighting, RGB effects, microphone noise reduction, latency mode, EQ (via Equalizer APO) and virtual 7.1 (via HeSuVi) all driven from a lightweight tray application with per-app profiles.",
+    "copyright": "© 2026 Mateo Builes Duque",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

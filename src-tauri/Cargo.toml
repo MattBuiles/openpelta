@@ -1,8 +1,8 @@
 [package]
 name = "openpelta"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+version = "0.2.0"
+description = "Open-source control panel for the ASUS ROG Pelta headset"
+authors = ["Mateo Builes Duque"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

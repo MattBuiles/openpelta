@@ -1,7 +1,7 @@
 {
   "name": "openpelta",
-  "version": "0.1.0",
-  "description": "",
+  "version": "0.2.0",
+  "description": "Open-source control panel for the ASUS ROG Pelta headset",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
